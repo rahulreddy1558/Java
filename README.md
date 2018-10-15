@@ -1,1 +1,1 @@
-# Java 8 Collections
+# Java 8 New Features
