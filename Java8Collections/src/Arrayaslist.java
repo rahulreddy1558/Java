@@ -1,5 +1,6 @@
 import java.util.LinkedList;
 import java.util.Arrays;
+import java.util.Collections;
 
 
 public class Arrayaslist {
@@ -23,6 +24,15 @@ public class Arrayaslist {
 		for(String b : p) {
 			System.out.println(b);
 		} 
+		/**
+		 * Sort is the Method from Collections 
+		 * used to sort List
+		 */
+		 Collections.sort(k);
+		 
+		 for(String b : k) {
+				System.out.println(b);
+			}
 		
 	}
 
