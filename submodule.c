@@ -1,3 +1,5 @@
+#define NO_THE_INDEX_COMPATIBILITY_MACROS
+
 #include "cache.h"
 #include "repository.h"
 #include "config.h"
@@ -19,38 +21,63 @@
 #include "remote.h"
 #include "worktree.h"
 #include "parse-options.h"
+#include "object-store.h"
+#include "commit-reach.h"
 
-static int config_fetch_recurse_submodules = RECURSE_SUBMODULES_ON_DEMAND;
 static int config_update_recurse_submodules = RECURSE_SUBMODULES_OFF;
-static int parallel_jobs = 1;
-static struct string_list changed_submodule_paths = STRING_LIST_INIT_DUP;
+static struct string_list changed_submodule_names = STRING_LIST_INIT_DUP;
 static int initialized_fetch_ref_tips;
 static struct oid_array ref_tips_before_fetch;
 static struct oid_array ref_tips_after_fetch;
 
 /*
- * The following flag is set if the .gitmodules file is unmerged. We then
- * disable recursion for all submodules where .git/config doesn't have a
- * matching config entry because we can't guess what might be configured in
- * .gitmodules unless the user resolves the conflict. When a command line
- * option is given (which always overrides configuration) this flag will be
- * ignored.
+ * Check if the .gitmodules file is unmerged. Parsing of the .gitmodules file
+ * will be disabled because we can't guess what might be configured in
+ * .gitmodules unless the user resolves the conflict.
  */
-static int gitmodules_is_unmerged;
+int is_gitmodules_unmerged(const struct index_state *istate)
+{
+	int pos = index_name_pos(istate, GITMODULES_FILE, strlen(GITMODULES_FILE));
+	if (pos < 0) { /* .gitmodules not found or isn't merged */
+		pos = -1 - pos;
+		if (istate->cache_nr > pos) {  /* there is a .gitmodules */
+			const struct cache_entry *ce = istate->cache[pos];
+			if (ce_namelen(ce) == strlen(GITMODULES_FILE) &&
+			    !strcmp(ce->name, GITMODULES_FILE))
+				return 1;
+		}
+	}
+
+	return 0;
+}
 
 /*
- * This flag is set if the .gitmodules file had unstaged modifications on
- * startup. This must be checked before allowing modifications to the
- * .gitmodules file with the intention to stage them later, because when
- * continuing we would stage the modifications the user didn't stage herself
- * too. That might change in a future version when we learn to stage the
- * changes we do ourselves without staging any previous modifications.
+ * Check if the .gitmodules file has unstaged modifications.  This must be
+ * checked before allowing modifications to the .gitmodules file with the
+ * intention to stage them later, because when continuing we would stage the
+ * modifications the user didn't stage herself too. That might change in a
+ * future version when we learn to stage the changes we do ourselves without
+ * staging any previous modifications.
  */
-static int gitmodules_is_modified;
-
-int is_staging_gitmodules_ok(void)
+int is_staging_gitmodules_ok(struct index_state *istate)
 {
-	return !gitmodules_is_modified;
+	int pos = index_name_pos(istate, GITMODULES_FILE, strlen(GITMODULES_FILE));
+
+	if ((pos >= 0) && (pos < istate->cache_nr)) {
+		struct stat st;
+		if (lstat(GITMODULES_FILE, &st) == 0 &&
+		    ie_match_stat(istate, istate->cache[pos], &st, 0) & DATA_CHANGED)
+			return 0;
+	}
+
+	return 1;
+}
+
+static int for_each_remote_ref_submodule(const char *submodule,
+					 each_ref_fn fn, void *cb_data)
+{
+	return refs_for_each_remote_ref(get_submodule_ref_store(submodule),
+					fn, cb_data);
 }
 
 /*
@@ -63,13 +90,13 @@ int update_path_in_gitmodules(const char *oldpath, const char *newpath)
 	struct strbuf entry = STRBUF_INIT;
 	const struct submodule *submodule;
 
-	if (!file_exists(".gitmodules")) /* Do nothing without .gitmodules */
+	if (!file_exists(GITMODULES_FILE)) /* Do nothing without .gitmodules */
 		return -1;
 
-	if (gitmodules_is_unmerged)
+	if (is_gitmodules_unmerged(the_repository->index))
 		die(_("Cannot change unmerged .gitmodules, resolve merge conflicts first"));
 
-	submodule = submodule_from_path(null_sha1, oldpath);
+	submodule = submodule_from_path(the_repository, &null_oid, oldpath);
 	if (!submodule || !submodule->name) {
 		warning(_("Could not find section in .gitmodules where path=%s"), oldpath);
 		return -1;
@@ -77,7 +104,7 @@ int update_path_in_gitmodules(const char *oldpath, const char *newpath)
 	strbuf_addstr(&entry, "submodule.");
 	strbuf_addstr(&entry, submodule->name);
 	strbuf_addstr(&entry, ".path");
-	if (git_config_set_in_file_gently(".gitmodules", entry.buf, newpath) < 0) {
+	if (git_config_set_in_file_gently(GITMODULES_FILE, entry.buf, newpath) < 0) {
 		/* Maybe the user already did that, don't error out here */
 		warning(_("Could not update .gitmodules entry %s"), entry.buf);
 		strbuf_release(&entry);
@@ -97,20 +124,20 @@ int remove_path_from_gitmodules(const char *path)
 	struct strbuf sect = STRBUF_INIT;
 	const struct submodule *submodule;
 
-	if (!file_exists(".gitmodules")) /* Do nothing without .gitmodules */
+	if (!file_exists(GITMODULES_FILE)) /* Do nothing without .gitmodules */
 		return -1;
 
-	if (gitmodules_is_unmerged)
+	if (is_gitmodules_unmerged(the_repository->index))
 		die(_("Cannot change unmerged .gitmodules, resolve merge conflicts first"));
 
-	submodule = submodule_from_path(null_sha1, path);
+	submodule = submodule_from_path(the_repository, &null_oid, path);
 	if (!submodule || !submodule->name) {
 		warning(_("Could not find section in .gitmodules where path=%s"), path);
 		return -1;
 	}
 	strbuf_addstr(&sect, "submodule.");
 	strbuf_addstr(&sect, submodule->name);
-	if (git_config_rename_section_in_file(".gitmodules", sect.buf, NULL) < 0) {
+	if (git_config_rename_section_in_file(GITMODULES_FILE, sect.buf, NULL) < 0) {
 		/* Maybe the user already did that, don't error out here */
 		warning(_("Could not remove .gitmodules entry for %s"), path);
 		strbuf_release(&sect);
@@ -120,13 +147,14 @@ int remove_path_from_gitmodules(const char *path)
 	return 0;
 }
 
-void stage_updated_gitmodules(void)
+void stage_updated_gitmodules(struct index_state *istate)
 {
-	if (add_file_to_cache(".gitmodules", 0))
+	if (add_file_to_index(istate, GITMODULES_FILE, 0))
 		die(_("staging updated .gitmodules failed"));
 }
 
-static int add_submodule_odb(const char *path)
+/* TODO: remove this function, use repo_submodule_init instead. */
+int add_submodule_odb(const char *path)
 {
 	struct strbuf objects_directory = STRBUF_INIT;
 	int ret = 0;
@@ -147,42 +175,21 @@ done:
 void set_diffopt_flags_from_submodule_config(struct diff_options *diffopt,
 					     const char *path)
 {
-	const struct submodule *submodule = submodule_from_path(null_sha1, path);
+	const struct submodule *submodule = submodule_from_path(the_repository,
+								&null_oid, path);
 	if (submodule) {
-		if (submodule->ignore)
-			handle_ignore_submodules_arg(diffopt, submodule->ignore);
-		else if (gitmodules_is_unmerged)
-			DIFF_OPT_SET(diffopt, IGNORE_SUBMODULES);
-	}
-}
+		const char *ignore;
+		char *key;
 
-/* For loading from the .gitmodules file. */
-static int git_modules_config(const char *var, const char *value, void *cb)
-{
-	if (!strcmp(var, "submodule.fetchjobs")) {
-		parallel_jobs = git_config_int(var, value);
-		if (parallel_jobs < 0)
-			die(_("negative values not allowed for submodule.fetchJobs"));
-		return 0;
-	} else if (starts_with(var, "submodule."))
-		return parse_submodule_config_option(var, value);
-	else if (!strcmp(var, "fetch.recursesubmodules")) {
-		config_fetch_recurse_submodules = parse_fetch_recurse_submodules_arg(var, value);
-		return 0;
-	}
-	return 0;
-}
+		key = xstrfmt("submodule.%s.ignore", submodule->name);
+		if (repo_config_get_string_const(the_repository, key, &ignore))
+			ignore = submodule->ignore;
+		free(key);
 
-/* Loads all submodule settings from the config. */
-int submodule_config(const char *var, const char *value, void *cb)
-{
-	if (!strcmp(var, "submodule.recurse")) {
-		int v = git_config_bool(var, value) ?
-			RECURSE_SUBMODULES_ON : RECURSE_SUBMODULES_OFF;
-		config_update_recurse_submodules = v;
-		return 0;
-	} else {
-		return git_modules_config(var, value, cb);
+		if (ignore)
+			handle_ignore_submodules_arg(diffopt, ignore);
+		else if (is_gitmodules_unmerged(the_repository->index))
+			diffopt->flags.ignore_submodules = 1;
 	}
 }
 
@@ -214,74 +221,6 @@ int option_parse_recurse_submodules_worktree_updater(const struct option *opt,
 	return 0;
 }
 
-void load_submodule_cache(void)
-{
-	if (config_update_recurse_submodules == RECURSE_SUBMODULES_OFF)
-		return;
-
-	gitmodules_config();
-	git_config(submodule_config, NULL);
-}
-
-void gitmodules_config(void)
-{
-	const char *work_tree = get_git_work_tree();
-	if (work_tree) {
-		struct strbuf gitmodules_path = STRBUF_INIT;
-		int pos;
-		strbuf_addstr(&gitmodules_path, work_tree);
-		strbuf_addstr(&gitmodules_path, "/.gitmodules");
-		if (read_cache() < 0)
-			die("index file corrupt");
-		pos = cache_name_pos(".gitmodules", 11);
-		if (pos < 0) { /* .gitmodules not found or isn't merged */
-			pos = -1 - pos;
-			if (active_nr > pos) {  /* there is a .gitmodules */
-				const struct cache_entry *ce = active_cache[pos];
-				if (ce_namelen(ce) == 11 &&
-				    !memcmp(ce->name, ".gitmodules", 11))
-					gitmodules_is_unmerged = 1;
-			}
-		} else if (pos < active_nr) {
-			struct stat st;
-			if (lstat(".gitmodules", &st) == 0 &&
-			    ce_match_stat(active_cache[pos], &st, 0) & DATA_CHANGED)
-				gitmodules_is_modified = 1;
-		}
-
-		if (!gitmodules_is_unmerged)
-			git_config_from_file(git_modules_config,
-				gitmodules_path.buf, NULL);
-		strbuf_release(&gitmodules_path);
-	}
-}
-
-static int gitmodules_cb(const char *var, const char *value, void *data)
-{
-	struct repository *repo = data;
-	return submodule_config_option(repo, var, value);
-}
-
-void repo_read_gitmodules(struct repository *repo)
-{
-	char *gitmodules_path = repo_worktree_path(repo, ".gitmodules");
-
-	git_config_from_file(gitmodules_cb, gitmodules_path, repo);
-	free(gitmodules_path);
-}
-
-void gitmodules_config_sha1(const unsigned char *commit_sha1)
-{
-	struct strbuf rev = STRBUF_INIT;
-	unsigned char sha1[20];
-
-	if (gitmodule_sha1_from_commit(commit_sha1, sha1, &rev)) {
-		git_config_from_blob_sha1(git_modules_config, rev.buf,
-					  sha1, NULL);
-	}
-	strbuf_release(&rev);
-}
-
 /*
  * Determine if a submodule has been initialized at a given 'path'
  */
@@ -293,7 +232,7 @@ int is_submodule_active(struct repository *repo, const char *path)
 	const struct string_list *sl;
 	const struct submodule *module;
 
-	module = submodule_from_cache(repo, null_sha1, path);
+	module = submodule_from_path(repo, &null_oid, path);
 
 	/* early return if there isn't a path->module mapping */
 	if (!module)
@@ -319,7 +258,7 @@ int is_submodule_active(struct repository *repo, const char *path)
 		}
 
 		parse_pathspec(&ps, 0, 0, NULL, args.argv);
-		ret = match_pathspec(&ps, path, strlen(path), 0, NULL, 1);
+		ret = match_pathspec(repo->index, &ps, path, strlen(path), 0, NULL, 1);
 
 		argv_array_clear(&args);
 		clear_pathspec(&ps);
@@ -410,24 +349,38 @@ void die_path_inside_submodule(const struct index_state *istate,
 	}
 }
 
+enum submodule_update_type parse_submodule_update_type(const char *value)
+{
+	if (!strcmp(value, "none"))
+		return SM_UPDATE_NONE;
+	else if (!strcmp(value, "checkout"))
+		return SM_UPDATE_CHECKOUT;
+	else if (!strcmp(value, "rebase"))
+		return SM_UPDATE_REBASE;
+	else if (!strcmp(value, "merge"))
+		return SM_UPDATE_MERGE;
+	else if (*value == '!')
+		return SM_UPDATE_COMMAND;
+	else
+		return SM_UPDATE_UNSPECIFIED;
+}
+
 int parse_submodule_update_strategy(const char *value,
 		struct submodule_update_strategy *dst)
 {
+	enum submodule_update_type type;
+
 	free((void*)dst->command);
 	dst->command = NULL;
-	if (!strcmp(value, "none"))
-		dst->type = SM_UPDATE_NONE;
-	else if (!strcmp(value, "checkout"))
-		dst->type = SM_UPDATE_CHECKOUT;
-	else if (!strcmp(value, "rebase"))
-		dst->type = SM_UPDATE_REBASE;
-	else if (!strcmp(value, "merge"))
-		dst->type = SM_UPDATE_MERGE;
-	else if (skip_prefix(value, "!", &value)) {
-		dst->type = SM_UPDATE_COMMAND;
-		dst->command = xstrdup(value);
-	} else
+
+	type = parse_submodule_update_type(value);
+	if (type == SM_UPDATE_UNSPECIFIED)
 		return -1;
+
+	dst->type = type;
+	if (type == SM_UPDATE_COMMAND)
+		dst->command = xstrdup(value + 1);
+
 	return 0;
 }
 
@@ -455,16 +408,16 @@ const char *submodule_strategy_to_string(const struct submodule_update_strategy 
 void handle_ignore_submodules_arg(struct diff_options *diffopt,
 				  const char *arg)
 {
-	DIFF_OPT_CLR(diffopt, IGNORE_SUBMODULES);
-	DIFF_OPT_CLR(diffopt, IGNORE_UNTRACKED_IN_SUBMODULES);
-	DIFF_OPT_CLR(diffopt, IGNORE_DIRTY_SUBMODULES);
+	diffopt->flags.ignore_submodules = 0;
+	diffopt->flags.ignore_untracked_in_submodules = 0;
+	diffopt->flags.ignore_dirty_submodules = 0;
 
 	if (!strcmp(arg, "all"))
-		DIFF_OPT_SET(diffopt, IGNORE_SUBMODULES);
+		diffopt->flags.ignore_submodules = 1;
 	else if (!strcmp(arg, "untracked"))
-		DIFF_OPT_SET(diffopt, IGNORE_UNTRACKED_IN_SUBMODULES);
+		diffopt->flags.ignore_untracked_in_submodules = 1;
 	else if (!strcmp(arg, "dirty"))
-		DIFF_OPT_SET(diffopt, IGNORE_DIRTY_SUBMODULES);
+		diffopt->flags.ignore_dirty_submodules = 1;
 	else if (strcmp(arg, "none"))
 		die("bad --ignore-submodules argument: %s", arg);
 }
@@ -475,7 +428,7 @@ static int prepare_submodule_summary(struct rev_info *rev, const char *path,
 {
 	struct commit_list *list;
 
-	init_revisions(rev, NULL);
+	repo_init_revisions(the_repository, rev, NULL);
 	setup_revisions(0, NULL, rev, NULL);
 	rev->left_right = 1;
 	rev->first_parent_only = 1;
@@ -490,9 +443,7 @@ static int prepare_submodule_summary(struct rev_info *rev, const char *path,
 	return prepare_revision_walk(rev);
 }
 
-static void print_submodule_summary(struct rev_info *rev, FILE *f,
-		const char *line_prefix,
-		const char *del, const char *add, const char *reset)
+static void print_submodule_summary(struct rev_info *rev, struct diff_options *o)
 {
 	static const char format[] = "  %m %s";
 	struct strbuf sb = STRBUF_INIT;
@@ -503,18 +454,12 @@ static void print_submodule_summary(struct rev_info *rev, FILE *f,
 		ctx.date_mode = rev->date_mode;
 		ctx.output_encoding = get_log_output_encoding();
 		strbuf_setlen(&sb, 0);
-		strbuf_addstr(&sb, line_prefix);
-		if (commit->object.flags & SYMMETRIC_LEFT) {
-			if (del)
-				strbuf_addstr(&sb, del);
-		}
-		else if (add)
-			strbuf_addstr(&sb, add);
 		format_commit_message(commit, format, &sb, &ctx);
-		if (reset)
-			strbuf_addstr(&sb, reset);
 		strbuf_addch(&sb, '\n');
-		fprintf(f, "%s", sb.buf);
+		if (commit->object.flags & SYMMETRIC_LEFT)
+			diff_emit_submodule_del(o, sb.buf);
+		else
+			diff_emit_submodule_add(o, sb.buf);
 	}
 	strbuf_release(&sb);
 }
@@ -541,11 +486,9 @@ void prepare_submodule_repo_env(struct argv_array *out)
  * attempt to lookup both the left and right commits and put them into the
  * left and right pointers.
  */
-static void show_submodule_header(FILE *f, const char *path,
-		const char *line_prefix,
+static void show_submodule_header(struct diff_options *o, const char *path,
 		struct object_id *one, struct object_id *two,
-		unsigned dirty_submodule, const char *meta,
-		const char *reset,
+		unsigned dirty_submodule,
 		struct commit **left, struct commit **right,
 		struct commit_list **merge_bases)
 {
@@ -554,11 +497,10 @@ static void show_submodule_header(FILE *f, const char *path,
 	int fast_forward = 0, fast_backward = 0;
 
 	if (dirty_submodule & DIRTY_SUBMODULE_UNTRACKED)
-		fprintf(f, "%sSubmodule %s contains untracked content\n",
-			line_prefix, path);
+		diff_emit_submodule_untracked(o, path);
+
 	if (dirty_submodule & DIRTY_SUBMODULE_MODIFIED)
-		fprintf(f, "%sSubmodule %s contains modified content\n",
-			line_prefix, path);
+		diff_emit_submodule_modified(o, path);
 
 	if (is_null_oid(one))
 		message = "(new submodule)";
@@ -567,7 +509,7 @@ static void show_submodule_header(FILE *f, const char *path,
 
 	if (add_submodule_odb(path)) {
 		if (!message)
-			message = "(not initialized)";
+			message = "(commits not present)";
 		goto output_header;
 	}
 
@@ -575,8 +517,8 @@ static void show_submodule_header(FILE *f, const char *path,
 	 * Attempt to lookup the commit references, and determine if this is
 	 * a fast forward or fast backwards update.
 	 */
-	*left = lookup_commit_reference(one);
-	*right = lookup_commit_reference(two);
+	*left = lookup_commit_reference(the_repository, one);
+	*right = lookup_commit_reference(the_repository, two);
 
 	/*
 	 * Warn about missing commits in the submodule project, but only if
@@ -594,37 +536,35 @@ static void show_submodule_header(FILE *f, const char *path,
 			fast_backward = 1;
 	}
 
-	if (!oidcmp(one, two)) {
+	if (oideq(one, two)) {
 		strbuf_release(&sb);
 		return;
 	}
 
 output_header:
-	strbuf_addf(&sb, "%s%sSubmodule %s ", line_prefix, meta, path);
-	strbuf_add_unique_abbrev(&sb, one->hash, DEFAULT_ABBREV);
+	strbuf_addf(&sb, "Submodule %s ", path);
+	strbuf_add_unique_abbrev(&sb, one, DEFAULT_ABBREV);
 	strbuf_addstr(&sb, (fast_backward || fast_forward) ? ".." : "...");
-	strbuf_add_unique_abbrev(&sb, two->hash, DEFAULT_ABBREV);
+	strbuf_add_unique_abbrev(&sb, two, DEFAULT_ABBREV);
 	if (message)
-		strbuf_addf(&sb, " %s%s\n", message, reset);
+		strbuf_addf(&sb, " %s\n", message);
 	else
-		strbuf_addf(&sb, "%s:%s\n", fast_backward ? " (rewind)" : "", reset);
-	fwrite(sb.buf, sb.len, 1, f);
+		strbuf_addf(&sb, "%s:\n", fast_backward ? " (rewind)" : "");
+	diff_emit_submodule_header(o, sb.buf);
 
 	strbuf_release(&sb);
 }
 
-void show_submodule_summary(FILE *f, const char *path,
-		const char *line_prefix,
+void show_submodule_summary(struct diff_options *o, const char *path,
 		struct object_id *one, struct object_id *two,
-		unsigned dirty_submodule, const char *meta,
-		const char *del, const char *add, const char *reset)
+		unsigned dirty_submodule)
 {
 	struct rev_info rev;
 	struct commit *left = NULL, *right = NULL;
 	struct commit_list *merge_bases = NULL;
 
-	show_submodule_header(f, path, line_prefix, one, two, dirty_submodule,
-			      meta, reset, &left, &right, &merge_bases);
+	show_submodule_header(o, path, one, two, dirty_submodule,
+			      &left, &right, &merge_bases);
 
 	/*
 	 * If we don't have both a left and a right pointer, there is no
@@ -636,11 +576,11 @@ void show_submodule_summary(FILE *f, const char *path,
 
 	/* Treat revision walker failure the same as missing commits */
 	if (prepare_submodule_summary(&rev, path, left, right, merge_bases)) {
-		fprintf(f, "%s(revision walker failed)\n", line_prefix);
+		diff_emit_submodule_error(o, "(revision walker failed)\n");
 		goto out;
 	}
 
-	print_submodule_summary(&rev, f, line_prefix, del, add, reset);
+	print_submodule_summary(&rev, o);
 
 out:
 	if (merge_bases)
@@ -649,21 +589,18 @@ out:
 	clear_commit_marks(right, ~0);
 }
 
-void show_submodule_inline_diff(FILE *f, const char *path,
-		const char *line_prefix,
+void show_submodule_inline_diff(struct diff_options *o, const char *path,
 		struct object_id *one, struct object_id *two,
-		unsigned dirty_submodule, const char *meta,
-		const char *del, const char *add, const char *reset,
-		const struct diff_options *o)
+		unsigned dirty_submodule)
 {
-	const struct object_id *old = &empty_tree_oid, *new = &empty_tree_oid;
+	const struct object_id *old_oid = the_hash_algo->empty_tree, *new_oid = the_hash_algo->empty_tree;
 	struct commit *left = NULL, *right = NULL;
 	struct commit_list *merge_bases = NULL;
-	struct strbuf submodule_dir = STRBUF_INIT;
 	struct child_process cp = CHILD_PROCESS_INIT;
+	struct strbuf sb = STRBUF_INIT;
 
-	show_submodule_header(f, path, line_prefix, one, two, dirty_submodule,
-			      meta, reset, &left, &right, &merge_bases);
+	show_submodule_header(o, path, one, two, dirty_submodule,
+			      &left, &right, &merge_bases);
 
 	/* We need a valid left and right commit to display a difference */
 	if (!(left || is_null_oid(one)) ||
@@ -671,21 +608,21 @@ void show_submodule_inline_diff(FILE *f, const char *path,
 		goto done;
 
 	if (left)
-		old = one;
+		old_oid = one;
 	if (right)
-		new = two;
+		new_oid = two;
 
-	fflush(f);
 	cp.git_cmd = 1;
 	cp.dir = path;
-	cp.out = dup(fileno(f));
+	cp.out = -1;
 	cp.no_stdin = 1;
 
 	/* TODO: other options may need to be passed here. */
 	argv_array_pushl(&cp.args, "diff", "--submodule=diff", NULL);
+	argv_array_pushf(&cp.args, "--color=%s", want_color(o->use_color) ?
+			 "always" : "never");
 
-	argv_array_pushf(&cp.args, "--line-prefix=%s", line_prefix);
-	if (DIFF_OPT_TST(o, REVERSE_DIFF)) {
+	if (o->flags.reverse_diff) {
 		argv_array_pushf(&cp.args, "--src-prefix=%s%s/",
 				 o->b_prefix, path);
 		argv_array_pushf(&cp.args, "--dst-prefix=%s%s/",
@@ -696,7 +633,7 @@ void show_submodule_inline_diff(FILE *f, const char *path,
 		argv_array_pushf(&cp.args, "--dst-prefix=%s%s/",
 				 o->b_prefix, path);
 	}
-	argv_array_push(&cp.args, oid_to_hex(old));
+	argv_array_push(&cp.args, oid_to_hex(old_oid));
 	/*
 	 * If the submodule has modified content, we will diff against the
 	 * work tree, under the assumption that the user has asked for the
@@ -704,25 +641,26 @@ void show_submodule_inline_diff(FILE *f, const char *path,
 	 * haven't yet been committed to the submodule yet.
 	 */
 	if (!(dirty_submodule & DIRTY_SUBMODULE_MODIFIED))
-		argv_array_push(&cp.args, oid_to_hex(new));
+		argv_array_push(&cp.args, oid_to_hex(new_oid));
 
 	prepare_submodule_repo_env(&cp.env_array);
-	if (run_command(&cp))
-		fprintf(f, "(diff failed)\n");
+	if (start_command(&cp))
+		diff_emit_submodule_error(o, "(diff failed)\n");
+
+	while (strbuf_getwholeline_fd(&sb, cp.out, '\n') != EOF)
+		diff_emit_submodule_pipethrough(o, sb.buf, sb.len);
+
+	if (finish_command(&cp))
+		diff_emit_submodule_error(o, "(diff failed)\n");
 
 done:
-	strbuf_release(&submodule_dir);
+	strbuf_release(&sb);
 	if (merge_bases)
 		free_commit_list(merge_bases);
 	if (left)
 		clear_commit_marks(left, ~0);
 	if (right)
 		clear_commit_marks(right, ~0);
-}
-
-void set_config_fetch_recurse_submodules(int value)
-{
-	config_fetch_recurse_submodules = value;
 }
 
 int should_update_submodules(void)
@@ -738,15 +676,15 @@ const struct submodule *submodule_from_ce(const struct cache_entry *ce)
 	if (!should_update_submodules())
 		return NULL;
 
-	return submodule_from_path(null_sha1, ce->name);
+	return submodule_from_path(the_repository, &null_oid, ce->name);
 }
 
 static struct oid_array *submodule_commits(struct string_list *submodules,
-					   const char *path)
+					   const char *name)
 {
 	struct string_list_item *item;
 
-	item = string_list_insert(submodules, path);
+	item = string_list_insert(submodules, name);
 	if (item->util)
 		return (struct oid_array *) item->util;
 
@@ -755,39 +693,70 @@ static struct oid_array *submodule_commits(struct string_list *submodules,
 	return (struct oid_array *) item->util;
 }
 
+struct collect_changed_submodules_cb_data {
+	struct string_list *changed;
+	const struct object_id *commit_oid;
+};
+
+/*
+ * this would normally be two functions: default_name_from_path() and
+ * path_from_default_name(). Since the default name is the same as
+ * the submodule path we can get away with just one function which only
+ * checks whether there is a submodule in the working directory at that
+ * location.
+ */
+static const char *default_name_or_path(const char *path_or_name)
+{
+	int error_code;
+
+	if (!is_submodule_populated_gently(path_or_name, &error_code))
+		return NULL;
+
+	return path_or_name;
+}
+
 static void collect_changed_submodules_cb(struct diff_queue_struct *q,
 					  struct diff_options *options,
 					  void *data)
 {
+	struct collect_changed_submodules_cb_data *me = data;
+	struct string_list *changed = me->changed;
+	const struct object_id *commit_oid = me->commit_oid;
 	int i;
-	struct string_list *changed = data;
 
 	for (i = 0; i < q->nr; i++) {
 		struct diff_filepair *p = q->queue[i];
 		struct oid_array *commits;
+		const struct submodule *submodule;
+		const char *name;
+
 		if (!S_ISGITLINK(p->two->mode))
 			continue;
 
-		if (S_ISGITLINK(p->one->mode)) {
-			/*
-			 * NEEDSWORK: We should honor the name configured in
-			 * the .gitmodules file of the commit we are examining
-			 * here to be able to correctly follow submodules
-			 * being moved around.
-			 */
-			commits = submodule_commits(changed, p->two->path);
-			oid_array_append(commits, &p->two->oid);
-		} else {
-			/* Submodule is new or was moved here */
-			/*
-			 * NEEDSWORK: When the .git directories of submodules
-			 * live inside the superprojects .git directory some
-			 * day we should fetch new submodules directly into
-			 * that location too when config or options request
-			 * that so they can be checked out from there.
-			 */
-			continue;
+		submodule = submodule_from_path(the_repository,
+						commit_oid, p->two->path);
+		if (submodule)
+			name = submodule->name;
+		else {
+			name = default_name_or_path(p->two->path);
+			/* make sure name does not collide with existing one */
+			if (name)
+				submodule = submodule_from_name(the_repository,
+								commit_oid, name);
+			if (submodule) {
+				warning("Submodule in commit %s at path: "
+					"'%s' collides with a submodule named "
+					"the same. Skipping it.",
+					oid_to_hex(commit_oid), p->two->path);
+				name = NULL;
+			}
 		}
+
+		if (!name)
+			continue;
+
+		commits = submodule_commits(changed, name);
+		oid_array_append(commits, &p->two->oid);
 	}
 }
 
@@ -797,24 +766,28 @@ static void collect_changed_submodules_cb(struct diff_queue_struct *q,
  * have a corresponding 'struct oid_array' (in the 'util' field) which lists
  * what the submodule pointers were updated to during the change.
  */
-static void collect_changed_submodules(struct string_list *changed,
+static void collect_changed_submodules(struct index_state *istate,
+				       struct string_list *changed,
 				       struct argv_array *argv)
 {
 	struct rev_info rev;
 	const struct commit *commit;
 
-	init_revisions(&rev, NULL);
+	repo_init_revisions(the_repository, &rev, NULL);
 	setup_revisions(argv->argc, argv->argv, &rev, NULL);
 	if (prepare_revision_walk(&rev))
 		die("revision walk setup failed");
 
 	while ((commit = get_revision(&rev))) {
 		struct rev_info diff_rev;
+		struct collect_changed_submodules_cb_data data;
+		data.changed = changed;
+		data.commit_oid = &commit->object.oid;
 
-		init_revisions(&diff_rev, NULL);
+		repo_init_revisions(the_repository, &diff_rev, NULL);
 		diff_rev.diffopt.output_format |= DIFF_FORMAT_CALLBACK;
 		diff_rev.diffopt.format_callback = collect_changed_submodules_cb;
-		diff_rev.diffopt.format_callback_data = changed;
+		diff_rev.diffopt.format_callback_data = &data;
 		diff_tree_combined_merge(commit, 1, &diff_rev);
 	}
 
@@ -842,19 +815,36 @@ static int append_oid_to_argv(const struct object_id *oid, void *data)
 	return 0;
 }
 
+struct has_commit_data {
+	int result;
+	const char *path;
+};
+
 static int check_has_commit(const struct object_id *oid, void *data)
 {
-	int *has_commit = data;
+	struct has_commit_data *cb = data;
 
-	if (!lookup_commit_reference(oid))
-		*has_commit = 0;
+	enum object_type type = oid_object_info(the_repository, oid, NULL);
 
-	return 0;
+	switch (type) {
+	case OBJ_COMMIT:
+		return 0;
+	case OBJ_BAD:
+		/*
+		 * Object is missing or invalid. If invalid, an error message
+		 * has already been printed.
+		 */
+		cb->result = 0;
+		return 0;
+	default:
+		die(_("submodule entry '%s' (%s) is a %s, not a commit"),
+		    cb->path, oid_to_hex(oid), type_name(type));
+	}
 }
 
 static int submodule_has_commits(const char *path, struct oid_array *commits)
 {
-	int has_commit = 1;
+	struct has_commit_data has_commit = { 1, path };
 
 	/*
 	 * Perform a cheap, but incorrect check for the existence of 'commits'.
@@ -870,7 +860,7 @@ static int submodule_has_commits(const char *path, struct oid_array *commits)
 
 	oid_array_for_each_unique(commits, check_has_commit, &has_commit);
 
-	if (has_commit) {
+	if (has_commit.result) {
 		/*
 		 * Even if the submodule is checked out and the commit is
 		 * present, make sure it exists in the submodule's object store
@@ -889,12 +879,12 @@ static int submodule_has_commits(const char *path, struct oid_array *commits)
 		cp.dir = path;
 
 		if (capture_command(&cp, &out, GIT_MAX_HEXSZ + 1) || out.len)
-			has_commit = 0;
+			has_commit.result = 0;
 
 		strbuf_release(&out);
 	}
 
-	return has_commit;
+	return has_commit.result;
 }
 
 static int submodule_needs_pushing(const char *path, struct oid_array *commits)
@@ -941,11 +931,13 @@ static int submodule_needs_pushing(const char *path, struct oid_array *commits)
 	return 0;
 }
 
-int find_unpushed_submodules(struct oid_array *commits,
-		const char *remotes_name, struct string_list *needs_pushing)
+int find_unpushed_submodules(struct index_state *istate,
+			     struct oid_array *commits,
+			     const char *remotes_name,
+			     struct string_list *needs_pushing)
 {
 	struct string_list submodules = STRING_LIST_INIT_DUP;
-	struct string_list_item *submodule;
+	struct string_list_item *name;
 	struct argv_array argv = ARGV_ARRAY_INIT;
 
 	/* argv.argv[0] will be ignored by setup_revisions */
@@ -954,11 +946,21 @@ int find_unpushed_submodules(struct oid_array *commits,
 	argv_array_push(&argv, "--not");
 	argv_array_pushf(&argv, "--remotes=%s", remotes_name);
 
-	collect_changed_submodules(&submodules, &argv);
+	collect_changed_submodules(istate, &submodules, &argv);
 
-	for_each_string_list_item(submodule, &submodules) {
-		struct oid_array *commits = submodule->util;
-		const char *path = submodule->string;
+	for_each_string_list_item(name, &submodules) {
+		struct oid_array *commits = name->util;
+		const struct submodule *submodule;
+		const char *path = NULL;
+
+		submodule = submodule_from_name(the_repository, &null_oid, name->string);
+		if (submodule)
+			path = submodule->path;
+		else
+			path = default_name_or_path(name->string);
+
+		if (!path)
+			continue;
 
 		if (submodule_needs_pushing(path, commits))
 			string_list_insert(needs_pushing, path);
@@ -972,7 +974,7 @@ int find_unpushed_submodules(struct oid_array *commits,
 
 static int push_submodule(const char *path,
 			  const struct remote *remote,
-			  const char **refspec, int refspec_nr,
+			  const struct refspec *rs,
 			  const struct string_list *push_options,
 			  int dry_run)
 {
@@ -995,8 +997,8 @@ static int push_submodule(const char *path,
 		if (remote->origin != REMOTE_UNCONFIGURED) {
 			int i;
 			argv_array_push(&cp.args, remote->name);
-			for (i = 0; i < refspec_nr; i++)
-				argv_array_push(&cp.args, refspec[i]);
+			for (i = 0; i < rs->raw_nr; i++)
+				argv_array_push(&cp.args, rs->raw[i]);
 		}
 
 		prepare_submodule_repo_env(&cp.env_array);
@@ -1015,18 +1017,20 @@ static int push_submodule(const char *path,
  * Perform a check in the submodule to see if the remote and refspec work.
  * Die if the submodule can't be pushed.
  */
-static void submodule_push_check(const char *path, const struct remote *remote,
-				 const char **refspec, int refspec_nr)
+static void submodule_push_check(const char *path, const char *head,
+				 const struct remote *remote,
+				 const struct refspec *rs)
 {
 	struct child_process cp = CHILD_PROCESS_INIT;
 	int i;
 
 	argv_array_push(&cp.args, "submodule--helper");
 	argv_array_push(&cp.args, "push-check");
+	argv_array_push(&cp.args, head);
 	argv_array_push(&cp.args, remote->name);
 
-	for (i = 0; i < refspec_nr; i++)
-		argv_array_push(&cp.args, refspec[i]);
+	for (i = 0; i < rs->raw_nr; i++)
+		argv_array_push(&cp.args, rs->raw[i]);
 
 	prepare_submodule_repo_env(&cp.env_array);
 	cp.git_cmd = 1;
@@ -1043,16 +1047,18 @@ static void submodule_push_check(const char *path, const struct remote *remote,
 		die("process for submodule '%s' failed", path);
 }
 
-int push_unpushed_submodules(struct oid_array *commits,
+int push_unpushed_submodules(struct index_state *istate,
+			     struct oid_array *commits,
 			     const struct remote *remote,
-			     const char **refspec, int refspec_nr,
+			     const struct refspec *rs,
 			     const struct string_list *push_options,
 			     int dry_run)
 {
 	int i, ret = 1;
 	struct string_list needs_pushing = STRING_LIST_INIT_DUP;
 
-	if (!find_unpushed_submodules(commits, remote->name, &needs_pushing))
+	if (!find_unpushed_submodules(istate, commits,
+				      remote->name, &needs_pushing))
 		return 1;
 
 	/*
@@ -1061,16 +1067,25 @@ int push_unpushed_submodules(struct oid_array *commits,
 	 * won't be propagated due to the remote being unconfigured (e.g. a URL
 	 * instead of a remote name).
 	 */
-	if (remote->origin != REMOTE_UNCONFIGURED)
+	if (remote->origin != REMOTE_UNCONFIGURED) {
+		char *head;
+		struct object_id head_oid;
+
+		head = resolve_refdup("HEAD", 0, &head_oid, NULL);
+		if (!head)
+			die(_("Failed to resolve HEAD as a valid ref."));
+
 		for (i = 0; i < needs_pushing.nr; i++)
 			submodule_push_check(needs_pushing.items[i].string,
-					     remote, refspec, refspec_nr);
+					     head, remote, rs);
+		free(head);
+	}
 
 	/* Actually push the submodules */
 	for (i = 0; i < needs_pushing.nr; i++) {
 		const char *path = needs_pushing.items[i].string;
 		fprintf(stderr, "Pushing submodule '%s'\n", path);
-		if (!push_submodule(path, remote, refspec, refspec_nr,
+		if (!push_submodule(path, remote, rs,
 				    push_options, dry_run)) {
 			fprintf(stderr, "Unable to push submodule '%s'\n", path);
 			ret = 0;
@@ -1100,14 +1115,14 @@ void check_for_new_submodule_commits(struct object_id *oid)
 	oid_array_append(&ref_tips_after_fetch, oid);
 }
 
-static void calculate_changed_submodule_paths(void)
+static void calculate_changed_submodule_paths(struct index_state *istate)
 {
 	struct argv_array argv = ARGV_ARRAY_INIT;
 	struct string_list changed_submodules = STRING_LIST_INIT_DUP;
-	const struct string_list_item *item;
+	const struct string_list_item *name;
 
 	/* No need to check if there are no submodules configured */
-	if (!submodule_from_path(NULL, NULL))
+	if (!submodule_from_path(the_repository, NULL, NULL))
 		return;
 
 	argv_array_push(&argv, "--"); /* argv[0] program name */
@@ -1119,16 +1134,26 @@ static void calculate_changed_submodule_paths(void)
 
 	/*
 	 * Collect all submodules (whether checked out or not) for which new
-	 * commits have been recorded upstream in "changed_submodule_paths".
+	 * commits have been recorded upstream in "changed_submodule_names".
 	 */
-	collect_changed_submodules(&changed_submodules, &argv);
+	collect_changed_submodules(istate, &changed_submodules, &argv);
 
-	for_each_string_list_item(item, &changed_submodules) {
-		struct oid_array *commits = item->util;
-		const char *path = item->string;
+	for_each_string_list_item(name, &changed_submodules) {
+		struct oid_array *commits = name->util;
+		const struct submodule *submodule;
+		const char *path = NULL;
+
+		submodule = submodule_from_name(the_repository, &null_oid, name->string);
+		if (submodule)
+			path = submodule->path;
+		else
+			path = default_name_or_path(name->string);
+
+		if (!path)
+			continue;
 
 		if (!submodule_has_commits(path, commits))
-			string_list_append(&changed_submodule_paths, path);
+			string_list_append(&changed_submodule_names, name->string);
 	}
 
 	free_submodules_oids(&changed_submodules);
@@ -1138,16 +1163,70 @@ static void calculate_changed_submodule_paths(void)
 	initialized_fetch_ref_tips = 0;
 }
 
+int submodule_touches_in_range(struct index_state *istate,
+			       struct object_id *excl_oid,
+			       struct object_id *incl_oid)
+{
+	struct string_list subs = STRING_LIST_INIT_DUP;
+	struct argv_array args = ARGV_ARRAY_INIT;
+	int ret;
+
+	/* No need to check if there are no submodules configured */
+	if (!submodule_from_path(the_repository, NULL, NULL))
+		return 0;
+
+	argv_array_push(&args, "--"); /* args[0] program name */
+	argv_array_push(&args, oid_to_hex(incl_oid));
+	if (!is_null_oid(excl_oid)) {
+		argv_array_push(&args, "--not");
+		argv_array_push(&args, oid_to_hex(excl_oid));
+	}
+
+	collect_changed_submodules(istate, &subs, &args);
+	ret = subs.nr;
+
+	argv_array_clear(&args);
+
+	free_submodules_oids(&subs);
+	return ret;
+}
+
 struct submodule_parallel_fetch {
 	int count;
 	struct argv_array args;
-	const char *work_tree;
+	struct repository *r;
 	const char *prefix;
 	int command_line_option;
+	int default_option;
 	int quiet;
 	int result;
 };
-#define SPF_INIT {0, ARGV_ARRAY_INIT, NULL, NULL, 0, 0, 0}
+#define SPF_INIT {0, ARGV_ARRAY_INIT, NULL, NULL, 0, 0, 0, 0}
+
+static int get_fetch_recurse_config(const struct submodule *submodule,
+				    struct submodule_parallel_fetch *spf)
+{
+	if (spf->command_line_option != RECURSE_SUBMODULES_DEFAULT)
+		return spf->command_line_option;
+
+	if (submodule) {
+		char *key;
+		const char *value;
+
+		int fetch_recurse = submodule->fetch_recurse;
+		key = xstrfmt("submodule.%s.fetchRecurseSubmodules", submodule->name);
+		if (!repo_config_get_string_const(spf->r, key, &value)) {
+			fetch_recurse = parse_fetch_recurse_submodules_arg(key, value);
+		}
+		free(key);
+
+		if (fetch_recurse != RECURSE_SUBMODULES_NONE)
+			/* local config overrules everything except commandline */
+			return fetch_recurse;
+	}
+
+	return spf->default_option;
+}
 
 static int get_next_submodule(struct child_process *cp,
 			      struct strbuf *err, void *data, void **task_cb)
@@ -1155,52 +1234,45 @@ static int get_next_submodule(struct child_process *cp,
 	int ret = 0;
 	struct submodule_parallel_fetch *spf = data;
 
-	for (; spf->count < active_nr; spf->count++) {
+	for (; spf->count < spf->r->index->cache_nr; spf->count++) {
 		struct strbuf submodule_path = STRBUF_INIT;
 		struct strbuf submodule_git_dir = STRBUF_INIT;
 		struct strbuf submodule_prefix = STRBUF_INIT;
-		const struct cache_entry *ce = active_cache[spf->count];
+		const struct cache_entry *ce = spf->r->index->cache[spf->count];
 		const char *git_dir, *default_argv;
 		const struct submodule *submodule;
+		struct submodule default_submodule = SUBMODULE_INIT;
 
 		if (!S_ISGITLINK(ce->ce_mode))
 			continue;
 
-		submodule = submodule_from_path(null_sha1, ce->name);
-		if (!submodule)
-			submodule = submodule_from_name(null_sha1, ce->name);
-
-		default_argv = "yes";
-		if (spf->command_line_option == RECURSE_SUBMODULES_DEFAULT) {
-			if (submodule &&
-			    submodule->fetch_recurse !=
-						RECURSE_SUBMODULES_NONE) {
-				if (submodule->fetch_recurse ==
-						RECURSE_SUBMODULES_OFF)
-					continue;
-				if (submodule->fetch_recurse ==
-						RECURSE_SUBMODULES_ON_DEMAND) {
-					if (!unsorted_string_list_lookup(&changed_submodule_paths, ce->name))
-						continue;
-					default_argv = "on-demand";
-				}
-			} else {
-				if ((config_fetch_recurse_submodules == RECURSE_SUBMODULES_OFF) ||
-				    gitmodules_is_unmerged)
-					continue;
-				if (config_fetch_recurse_submodules == RECURSE_SUBMODULES_ON_DEMAND) {
-					if (!unsorted_string_list_lookup(&changed_submodule_paths, ce->name))
-						continue;
-					default_argv = "on-demand";
-				}
+		submodule = submodule_from_path(spf->r, &null_oid, ce->name);
+		if (!submodule) {
+			const char *name = default_name_or_path(ce->name);
+			if (name) {
+				default_submodule.path = default_submodule.name = name;
+				submodule = &default_submodule;
 			}
-		} else if (spf->command_line_option == RECURSE_SUBMODULES_ON_DEMAND) {
-			if (!unsorted_string_list_lookup(&changed_submodule_paths, ce->name))
-				continue;
-			default_argv = "on-demand";
 		}
 
-		strbuf_addf(&submodule_path, "%s/%s", spf->work_tree, ce->name);
+		switch (get_fetch_recurse_config(submodule, spf))
+		{
+		default:
+		case RECURSE_SUBMODULES_DEFAULT:
+		case RECURSE_SUBMODULES_ON_DEMAND:
+			if (!submodule || !unsorted_string_list_lookup(&changed_submodule_names,
+							 submodule->name))
+				continue;
+			default_argv = "on-demand";
+			break;
+		case RECURSE_SUBMODULES_ON:
+			default_argv = "yes";
+			break;
+		case RECURSE_SUBMODULES_OFF:
+			continue;
+		}
+
+		strbuf_repo_worktree_path(&submodule_path, spf->r, "%s", ce->name);
 		strbuf_addf(&submodule_git_dir, "%s/.git", submodule_path.buf);
 		strbuf_addf(&submodule_prefix, "%s%s/", spf->prefix, ce->name);
 		git_dir = read_gitfile(submodule_git_dir.buf);
@@ -1253,22 +1325,25 @@ static int fetch_finish(int retvalue, struct strbuf *err,
 	return 0;
 }
 
-int fetch_populated_submodules(const struct argv_array *options,
+int fetch_populated_submodules(struct repository *r,
+			       const struct argv_array *options,
 			       const char *prefix, int command_line_option,
+			       int default_option,
 			       int quiet, int max_parallel_jobs)
 {
 	int i;
 	struct submodule_parallel_fetch spf = SPF_INIT;
 
-	spf.work_tree = get_git_work_tree();
+	spf.r = r;
 	spf.command_line_option = command_line_option;
+	spf.default_option = default_option;
 	spf.quiet = quiet;
 	spf.prefix = prefix;
 
-	if (!spf.work_tree)
+	if (!r->worktree)
 		goto out;
 
-	if (read_cache() < 0)
+	if (repo_read_index(r) < 0)
 		die("index file corrupt");
 
 	argv_array_push(&spf.args, "fetch");
@@ -1277,10 +1352,7 @@ int fetch_populated_submodules(const struct argv_array *options,
 	argv_array_push(&spf.args, "--recurse-submodules-default");
 	/* default value, "--submodule-prefix" and its value are added later */
 
-	if (max_parallel_jobs < 0)
-		max_parallel_jobs = parallel_jobs;
-
-	calculate_changed_submodule_paths();
+	calculate_changed_submodule_paths(r->index);
 	run_processes_parallel(max_parallel_jobs,
 			       get_next_submodule,
 			       fetch_start_failure,
@@ -1289,7 +1361,7 @@ int fetch_populated_submodules(const struct argv_array *options,
 
 	argv_array_clear(&spf.args);
 out:
-	string_list_clear(&changed_submodule_paths, 1);
+	string_list_clear(&changed_submodule_names, 1);
 	return spf.result;
 }
 
@@ -1338,7 +1410,7 @@ unsigned is_submodule_modified(const char *path, int ignore_untracked)
 		    buf.buf[0] == '2') {
 			/* T = line type, XY = status, SSSS = submodule state */
 			if (buf.len < strlen("T XY SSSS"))
-				die("BUG: invalid status --porcelain=2 line %s",
+				BUG("invalid status --porcelain=2 line %s",
 				    buf.buf);
 
 			if (buf.buf[5] == 'S' && buf.buf[8] == 'U')
@@ -1507,7 +1579,7 @@ static void submodule_reset_index(const char *path)
 				   get_super_prefix_or_empty(), path);
 	argv_array_pushl(&cp.args, "read-tree", "-u", "--reset", NULL);
 
-	argv_array_push(&cp.args, EMPTY_TREE_SHA1_HEX);
+	argv_array_push(&cp.args, empty_tree_oid_hex());
 
 	if (run_command(&cp))
 		die("could not reset submodule index");
@@ -1519,8 +1591,8 @@ static void submodule_reset_index(const char *path)
  * pass NULL for old or new respectively.
  */
 int submodule_move_head(const char *path,
-			 const char *old,
-			 const char *new,
+			 const char *old_head,
+			 const char *new_head,
 			 unsigned flags)
 {
 	int ret = 0;
@@ -1541,39 +1613,39 @@ int submodule_move_head(const char *path,
 	else
 		error_code_ptr = NULL;
 
-	if (old && !is_submodule_populated_gently(path, error_code_ptr))
+	if (old_head && !is_submodule_populated_gently(path, error_code_ptr))
 		return 0;
 
-	sub = submodule_from_path(null_sha1, path);
+	sub = submodule_from_path(the_repository, &null_oid, path);
 
 	if (!sub)
-		die("BUG: could not get submodule information for '%s'", path);
+		BUG("could not get submodule information for '%s'", path);
 
-	if (old && !(flags & SUBMODULE_MOVE_HEAD_FORCE)) {
+	if (old_head && !(flags & SUBMODULE_MOVE_HEAD_FORCE)) {
 		/* Check if the submodule has a dirty index. */
 		if (submodule_has_dirty_index(sub))
 			return error(_("submodule '%s' has dirty index"), path);
 	}
 
 	if (!(flags & SUBMODULE_MOVE_HEAD_DRY_RUN)) {
-		if (old) {
+		if (old_head) {
 			if (!submodule_uses_gitfile(path))
 				absorb_git_dir_into_superproject("", path,
 					ABSORB_GITDIR_RECURSE_SUBMODULES);
 		} else {
 			char *gitdir = xstrfmt("%s/modules/%s",
 				    get_git_common_dir(), sub->name);
-			connect_work_tree_and_git_dir(path, gitdir);
+			connect_work_tree_and_git_dir(path, gitdir, 0);
 			free(gitdir);
 
 			/* make sure the index is clean as well */
 			submodule_reset_index(path);
 		}
 
-		if (old && (flags & SUBMODULE_MOVE_HEAD_FORCE)) {
+		if (old_head && (flags & SUBMODULE_MOVE_HEAD_FORCE)) {
 			char *gitdir = xstrfmt("%s/modules/%s",
 				    get_git_common_dir(), sub->name);
-			connect_work_tree_and_git_dir(path, gitdir);
+			connect_work_tree_and_git_dir(path, gitdir, 1);
 			free(gitdir);
 		}
 	}
@@ -1598,16 +1670,18 @@ int submodule_move_head(const char *path,
 	else
 		argv_array_push(&cp.args, "-m");
 
-	argv_array_push(&cp.args, old ? old : EMPTY_TREE_SHA1_HEX);
-	argv_array_push(&cp.args, new ? new : EMPTY_TREE_SHA1_HEX);
+	if (!(flags & SUBMODULE_MOVE_HEAD_FORCE))
+		argv_array_push(&cp.args, old_head ? old_head : empty_tree_oid_hex());
+
+	argv_array_push(&cp.args, new_head ? new_head : empty_tree_oid_hex());
 
 	if (run_command(&cp)) {
-		ret = -1;
+		ret = error(_("Submodule '%s' could not be updated."), path);
 		goto out;
 	}
 
 	if (!(flags & SUBMODULE_MOVE_HEAD_DRY_RUN)) {
-		if (new) {
+		if (new_head) {
 			child_process_init(&cp);
 			/* also set the HEAD accordingly */
 			cp.git_cmd = 1;
@@ -1615,7 +1689,8 @@ int submodule_move_head(const char *path,
 			cp.dir = path;
 
 			prepare_submodule_repo_env(&cp.env_array);
-			argv_array_pushl(&cp.args, "update-ref", "HEAD", new, NULL);
+			argv_array_pushl(&cp.args, "update-ref", "HEAD",
+					 "--no-deref", new_head, NULL);
 
 			if (run_command(&cp)) {
 				ret = -1;
@@ -1634,174 +1709,6 @@ int submodule_move_head(const char *path,
 	}
 out:
 	return ret;
-}
-
-static int find_first_merges(struct object_array *result, const char *path,
-		struct commit *a, struct commit *b)
-{
-	int i, j;
-	struct object_array merges = OBJECT_ARRAY_INIT;
-	struct commit *commit;
-	int contains_another;
-
-	char merged_revision[42];
-	const char *rev_args[] = { "rev-list", "--merges", "--ancestry-path",
-				   "--all", merged_revision, NULL };
-	struct rev_info revs;
-	struct setup_revision_opt rev_opts;
-
-	memset(result, 0, sizeof(struct object_array));
-	memset(&rev_opts, 0, sizeof(rev_opts));
-
-	/* get all revisions that merge commit a */
-	xsnprintf(merged_revision, sizeof(merged_revision), "^%s",
-			oid_to_hex(&a->object.oid));
-	init_revisions(&revs, NULL);
-	rev_opts.submodule = path;
-	setup_revisions(ARRAY_SIZE(rev_args)-1, rev_args, &revs, &rev_opts);
-
-	/* save all revisions from the above list that contain b */
-	if (prepare_revision_walk(&revs))
-		die("revision walk setup failed");
-	while ((commit = get_revision(&revs)) != NULL) {
-		struct object *o = &(commit->object);
-		if (in_merge_bases(b, commit))
-			add_object_array(o, NULL, &merges);
-	}
-	reset_revision_walk();
-
-	/* Now we've got all merges that contain a and b. Prune all
-	 * merges that contain another found merge and save them in
-	 * result.
-	 */
-	for (i = 0; i < merges.nr; i++) {
-		struct commit *m1 = (struct commit *) merges.objects[i].item;
-
-		contains_another = 0;
-		for (j = 0; j < merges.nr; j++) {
-			struct commit *m2 = (struct commit *) merges.objects[j].item;
-			if (i != j && in_merge_bases(m2, m1)) {
-				contains_another = 1;
-				break;
-			}
-		}
-
-		if (!contains_another)
-			add_object_array(merges.objects[i].item, NULL, result);
-	}
-
-	free(merges.objects);
-	return result->nr;
-}
-
-static void print_commit(struct commit *commit)
-{
-	struct strbuf sb = STRBUF_INIT;
-	struct pretty_print_context ctx = {0};
-	ctx.date_mode.type = DATE_NORMAL;
-	format_commit_message(commit, " %h: %m %s", &sb, &ctx);
-	fprintf(stderr, "%s\n", sb.buf);
-	strbuf_release(&sb);
-}
-
-#define MERGE_WARNING(path, msg) \
-	warning("Failed to merge submodule %s (%s)", path, msg);
-
-int merge_submodule(struct object_id *result, const char *path,
-		    const struct object_id *base, const struct object_id *a,
-		    const struct object_id *b, int search)
-{
-	struct commit *commit_base, *commit_a, *commit_b;
-	int parent_count;
-	struct object_array merges;
-
-	int i;
-
-	/* store a in result in case we fail */
-	oidcpy(result, a);
-
-	/* we can not handle deletion conflicts */
-	if (is_null_oid(base))
-		return 0;
-	if (is_null_oid(a))
-		return 0;
-	if (is_null_oid(b))
-		return 0;
-
-	if (add_submodule_odb(path)) {
-		MERGE_WARNING(path, "not checked out");
-		return 0;
-	}
-
-	if (!(commit_base = lookup_commit_reference(base)) ||
-	    !(commit_a = lookup_commit_reference(a)) ||
-	    !(commit_b = lookup_commit_reference(b))) {
-		MERGE_WARNING(path, "commits not present");
-		return 0;
-	}
-
-	/* check whether both changes are forward */
-	if (!in_merge_bases(commit_base, commit_a) ||
-	    !in_merge_bases(commit_base, commit_b)) {
-		MERGE_WARNING(path, "commits don't follow merge-base");
-		return 0;
-	}
-
-	/* Case #1: a is contained in b or vice versa */
-	if (in_merge_bases(commit_a, commit_b)) {
-		oidcpy(result, b);
-		return 1;
-	}
-	if (in_merge_bases(commit_b, commit_a)) {
-		oidcpy(result, a);
-		return 1;
-	}
-
-	/*
-	 * Case #2: There are one or more merges that contain a and b in
-	 * the submodule. If there is only one, then present it as a
-	 * suggestion to the user, but leave it marked unmerged so the
-	 * user needs to confirm the resolution.
-	 */
-
-	/* Skip the search if makes no sense to the calling context.  */
-	if (!search)
-		return 0;
-
-	/* find commit which merges them */
-	parent_count = find_first_merges(&merges, path, commit_a, commit_b);
-	switch (parent_count) {
-	case 0:
-		MERGE_WARNING(path, "merge following commits not found");
-		break;
-
-	case 1:
-		MERGE_WARNING(path, "not fast-forward");
-		fprintf(stderr, "Found a possible merge resolution "
-				"for the submodule:\n");
-		print_commit((struct commit *) merges.objects[0].item);
-		fprintf(stderr,
-			"If this is correct simply add it to the index "
-			"for example\n"
-			"by using:\n\n"
-			"  git update-index --cacheinfo 160000 %s \"%s\"\n\n"
-			"which will accept this suggestion.\n",
-			oid_to_hex(&merges.objects[0].item->oid), path);
-		break;
-
-	default:
-		MERGE_WARNING(path, "multiple merges found");
-		for (i = 0; i < merges.nr; i++)
-			print_commit((struct commit *) merges.objects[i].item);
-	}
-
-	free(merges.objects);
-	return 0;
-}
-
-int parallel_submodules(void)
-{
-	return parallel_jobs;
 }
 
 /*
@@ -1826,7 +1733,7 @@ static void relocate_single_git_dir_into_superproject(const char *prefix,
 
 	real_old_git_dir = real_pathdup(old_git_dir, 1);
 
-	sub = submodule_from_path(null_sha1, path);
+	sub = submodule_from_path(the_repository, &null_oid, path);
 	if (!sub)
 		die(_("could not lookup name for submodule '%s'"), path);
 
@@ -1882,11 +1789,11 @@ void absorb_git_dir_into_superproject(const char *prefix,
 		* superproject did not rewrite the git file links yet,
 		* fix it now.
 		*/
-		sub = submodule_from_path(null_sha1, path);
+		sub = submodule_from_path(the_repository, &null_oid, path);
 		if (!sub)
 			die(_("could not lookup name for submodule '%s'"), path);
 		connect_work_tree_and_git_dir(path,
-			git_path("modules/%s", sub->name));
+			git_path("modules/%s", sub->name), 0);
 	} else {
 		/* Is it already absorbed into the superprojects git dir? */
 		char *real_sub_git_dir = real_pathdup(sub_git_dir, 1);
@@ -1905,7 +1812,7 @@ void absorb_git_dir_into_superproject(const char *prefix,
 		struct strbuf sb = STRBUF_INIT;
 
 		if (flags & ~ABSORB_GITDIR_RECURSE_SUBMODULES)
-			die("BUG: we don't know how to pass the flags down?");
+			BUG("we don't know how to pass the flags down?");
 
 		strbuf_addstr(&sb, get_super_prefix_or_empty());
 		strbuf_addstr(&sb, path);
@@ -1979,11 +1886,11 @@ const char *get_superproject_working_tree(void)
 		 * We're only interested in the name after the tab.
 		 */
 		super_sub = strchr(sb.buf, '\t') + 1;
-		super_sub_len = sb.buf + sb.len - super_sub - 1;
+		super_sub_len = strlen(super_sub);
 
 		if (super_sub_len > cwd_len ||
 		    strcmp(&cwd[cwd_len - super_sub_len], super_sub))
-			die (_("BUG: returned path string doesn't match cwd?"));
+			BUG("returned path string doesn't match cwd?");
 
 		super_wt = xstrdup(cwd);
 		super_wt[cwd_len - super_sub_len] = '\0';
@@ -2007,6 +1914,10 @@ const char *get_superproject_working_tree(void)
 	return ret;
 }
 
+/*
+ * Put the gitdir for a submodule (given relative to the main
+ * repository worktree) into `buf`, or return -1 on error.
+ */
 int submodule_to_gitdir(struct strbuf *buf, const char *submodule)
 {
 	const struct submodule *sub;
@@ -2024,8 +1935,7 @@ int submodule_to_gitdir(struct strbuf *buf, const char *submodule)
 		strbuf_addstr(buf, git_dir);
 	}
 	if (!is_git_directory(buf->buf)) {
-		gitmodules_config();
-		sub = submodule_from_path(null_sha1, submodule);
+		sub = submodule_from_path(the_repository, &null_oid, submodule);
 		if (!sub) {
 			ret = -1;
 			goto cleanup;

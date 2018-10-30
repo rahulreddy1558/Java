@@ -185,7 +185,7 @@ struct date_mode *date_mode_from_type(enum date_mode_type type)
 {
 	static struct date_mode mode;
 	if (type == DATE_STRFTIME)
-		die("BUG: cannot create anonymous strftime date_mode struct");
+		BUG("cannot create anonymous strftime date_mode struct");
 	mode.type = type;
 	mode.local = 0;
 	return &mode;
@@ -256,7 +256,7 @@ const char *show_date(timestamp_t time, int tz, const struct date_mode *mode)
 			tm->tm_hour, tm->tm_min, tm->tm_sec, tz);
 	else if (mode->type == DATE_STRFTIME)
 		strbuf_addftime(&timebuf, mode->strftime_fmt, tm, tz,
-				mode->local ? NULL : "");
+				!mode->local);
 	else
 		strbuf_addf(&timebuf, "%.3s %.3s %d %02d:%02d:%02d %d%c%+05d",
 				weekday_names[tm->tm_wday],

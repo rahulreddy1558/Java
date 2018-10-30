@@ -16,8 +16,7 @@ test_expect_success setup '
 	git checkout HEAD^0 &&
 	test_commit B fileB two &&
 	git tag -d A B &&
-	git reflog expire --expire=now --all &&
-	>empty
+	git reflog expire --expire=now --all
 '
 
 test_expect_success 'loose objects borrowed from alternate are not missing' '
@@ -29,12 +28,12 @@ test_expect_success 'loose objects borrowed from alternate are not missing' '
 		test_commit C fileC one &&
 		git fsck --no-dangling >../actual 2>&1
 	) &&
-	test_cmp empty actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'HEAD is part of refs, valid objects appear valid' '
 	git fsck >actual 2>&1 &&
-	test_cmp empty actual
+	test_must_be_empty actual
 '
 
 # Corruption tests follow.  Make sure to remove all traces of the
@@ -222,6 +221,28 @@ test_expect_success 'unparseable tree object' '
 	test_i18ngrep ! "fatal: empty filename in tree entry" out
 '
 
+hex2oct() {
+	perl -ne 'printf "\\%03o", hex for /../g'
+}
+
+test_expect_success 'tree entry with type mismatch' '
+	test_when_finished "remove_object \$blob" &&
+	test_when_finished "remove_object \$tree" &&
+	test_when_finished "remove_object \$commit" &&
+	test_when_finished "git update-ref -d refs/heads/type_mismatch" &&
+	blob=$(echo blob | git hash-object -w --stdin) &&
+	blob_bin=$(echo $blob | hex2oct) &&
+	tree=$(
+		printf "40000 dir\0${blob_bin}100644 file\0${blob_bin}" |
+		git hash-object -t tree --stdin -w --literally
+	) &&
+	commit=$(git commit-tree $tree) &&
+	git update-ref refs/heads/type_mismatch $commit &&
+	test_must_fail git fsck >out 2>&1 &&
+	test_i18ngrep "is a blob, not a tree" out &&
+	test_i18ngrep ! "dangling blob" out
+'
+
 test_expect_success 'tag pointing to nonexistent' '
 	cat >invalid-tag <<-\EOF &&
 	object ffffffffffffffffffffffffffffffffffffffff
@@ -324,12 +345,12 @@ test_expect_success 'tag with NUL in header' '
 
 test_expect_success 'cleaned up' '
 	git fsck >actual 2>&1 &&
-	test_cmp empty actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'rev-list --verify-objects' '
 	git rev-list --verify-objects --all >/dev/null 2>out &&
-	test_cmp empty out
+	test_must_be_empty out
 '
 
 test_expect_success 'rev-list --verify-objects with bad sha1' '
@@ -350,7 +371,7 @@ test_expect_success 'rev-list --verify-objects with bad sha1' '
 
 	test_might_fail git rev-list --verify-objects refs/heads/bogus >/dev/null 2>out &&
 	cat out &&
-	grep -q "error: sha1 mismatch 63ffffffffffffffffffffffffffffffffffffff" out
+	test_i18ngrep -q "error: sha1 mismatch 63ffffffffffffffffffffffffffffffffffffff" out
 '
 
 test_expect_success 'force fsck to ignore double author' '
@@ -573,7 +594,7 @@ test_expect_success 'fsck --name-objects' '
 		remove_object $(git rev-parse julius:caesar.t) &&
 		test_must_fail git fsck --name-objects >out &&
 		tree=$(git rev-parse --verify julius:) &&
-		grep "$tree (\(refs/heads/master\|HEAD\)@{[0-9]*}:" out
+		egrep "$tree \((refs/heads/master|HEAD)@\{[0-9]*\}:" out
 	)
 '
 
@@ -606,6 +627,22 @@ test_expect_success 'fsck errors in packed objects' '
 	grep "error in commit $one.* - bad name" out &&
 	grep "error in commit $two.* - bad name" out &&
 	! grep corrupt out
+'
+
+test_expect_success 'fsck fails on corrupt packfile' '
+	hsh=$(git commit-tree -m mycommit HEAD^{tree}) &&
+	pack=$(echo $hsh | git pack-objects .git/objects/pack/pack) &&
+
+	# Corrupt the first byte of the first object. (It contains 3 type bits,
+	# at least one of which is not zero, so setting the first byte to 0 is
+	# sufficient.)
+	chmod a+w .git/objects/pack/pack-$pack.pack &&
+	printf '\0' | dd of=.git/objects/pack/pack-$pack.pack bs=1 conv=notrunc seek=12 &&
+
+	test_when_finished "rm -f .git/objects/pack/pack-$pack.*" &&
+	remove_object $hsh &&
+	test_must_fail git fsck 2>out &&
+	test_i18ngrep "checksum mismatch" out
 '
 
 test_expect_success 'fsck finds problems in duplicate loose objects' '
@@ -675,7 +712,7 @@ test_expect_success 'fsck notices dangling objects' '
 
 test_expect_success 'fsck $name notices bogus $name' '
 	test_must_fail git fsck bogus &&
-	test_must_fail git fsck $_z40
+	test_must_fail git fsck $ZERO_OID
 '
 
 test_expect_success 'bogus head does not fallback to all heads' '
@@ -685,7 +722,7 @@ test_expect_success 'bogus head does not fallback to all heads' '
 	blob=$(git rev-parse :foo) &&
 	test_when_finished "git rm --cached foo" &&
 	remove_object $blob &&
-	test_must_fail git fsck $_z40 >out 2>&1 &&
+	test_must_fail git fsck $ZERO_OID >out 2>&1 &&
 	! grep $blob out
 '
 

@@ -6,7 +6,7 @@
 #include "cache.h"
 #include "config.h"
 #include "builtin.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "parse-options.h"
 #include "dir.h"
 #include "run-command.h"
@@ -31,6 +31,8 @@
 #include "mailinfo.h"
 #include "apply.h"
 #include "string-list.h"
+#include "packfile.h"
+#include "repository.h"
 
 /**
  * Returns 1 if the file is empty or does not exist, 0 otherwise.
@@ -402,11 +404,11 @@ static void am_load(struct am_state *state)
 	struct strbuf sb = STRBUF_INIT;
 
 	if (read_state_file(&sb, state, "next", 1) < 0)
-		die("BUG: state file 'next' does not exist");
+		BUG("state file 'next' does not exist");
 	state->cur = strtol(sb.buf, NULL, 10);
 
 	if (read_state_file(&sb, state, "last", 1) < 0)
-		die("BUG: state file 'last' does not exist");
+		BUG("state file 'last' does not exist");
 	state->last = strtol(sb.buf, NULL, 10);
 
 	if (read_author_script(state) < 0)
@@ -430,6 +432,14 @@ static void am_load(struct am_state *state)
 
 	read_state_file(&sb, state, "utf8", 1);
 	state->utf8 = !strcmp(sb.buf, "t");
+
+	if (file_exists(am_path(state, "rerere-autoupdate"))) {
+		read_state_file(&sb, state, "rerere-autoupdate", 1);
+		state->allow_rerere_autoupdate = strcmp(sb.buf, "t") ?
+			RERERE_NOAUTOUPDATE : RERERE_AUTOUPDATE;
+	} else {
+		state->allow_rerere_autoupdate = 0;
+	}
 
 	read_state_file(&sb, state, "keep", 1);
 	if (!strcmp(sb.buf, "t"))
@@ -662,9 +672,7 @@ static int detect_patch_format(const char **paths)
 		goto done;
 	}
 
-	strbuf_reset(&l2);
 	strbuf_getline(&l2, fp);
-	strbuf_reset(&l3);
 	strbuf_getline(&l3, fp);
 
 	/*
@@ -687,6 +695,8 @@ static int detect_patch_format(const char **paths)
 done:
 	fclose(fp);
 	strbuf_release(&l1);
+	strbuf_release(&l2);
+	strbuf_release(&l3);
 	return ret;
 }
 
@@ -699,6 +709,7 @@ static int split_mail_mbox(struct am_state *state, const char **paths,
 {
 	struct child_process cp = CHILD_PROCESS_INIT;
 	struct strbuf last = STRBUF_INIT;
+	int ret;
 
 	cp.git_cmd = 1;
 	argv_array_push(&cp.args, "mailsplit");
@@ -712,13 +723,16 @@ static int split_mail_mbox(struct am_state *state, const char **paths,
 	argv_array_push(&cp.args, "--");
 	argv_array_pushv(&cp.args, paths);
 
-	if (capture_command(&cp, &last, 8))
-		return -1;
+	ret = capture_command(&cp, &last, 8);
+	if (ret)
+		goto exit;
 
 	state->cur = 1;
 	state->last = strtol(last.buf, NULL, 10);
 
-	return 0;
+exit:
+	strbuf_release(&last);
+	return ret ? -1 : 0;
 }
 
 /**
@@ -872,6 +886,7 @@ static int split_mail_stgit_series(struct am_state *state, const char **paths,
 static int hg_patch_to_mail(FILE *out, FILE *in, int keep_cr)
 {
 	struct strbuf sb = STRBUF_INIT;
+	int rc = 0;
 
 	while (!strbuf_getline_lf(&sb, in)) {
 		const char *str;
@@ -885,19 +900,27 @@ static int hg_patch_to_mail(FILE *out, FILE *in, int keep_cr)
 
 			errno = 0;
 			timestamp = parse_timestamp(str, &end, 10);
-			if (errno)
-				return error(_("invalid timestamp"));
+			if (errno) {
+				rc = error(_("invalid timestamp"));
+				goto exit;
+			}
 
-			if (!skip_prefix(end, " ", &str))
-				return error(_("invalid Date line"));
+			if (!skip_prefix(end, " ", &str)) {
+				rc = error(_("invalid Date line"));
+				goto exit;
+			}
 
 			errno = 0;
 			tz = strtol(str, &end, 10);
-			if (errno)
-				return error(_("invalid timezone offset"));
+			if (errno) {
+				rc = error(_("invalid timezone offset"));
+				goto exit;
+			}
 
-			if (*end)
-				return error(_("invalid Date line"));
+			if (*end) {
+				rc = error(_("invalid Date line"));
+				goto exit;
+			}
 
 			/*
 			 * mercurial's timezone is in seconds west of UTC,
@@ -922,9 +945,9 @@ static int hg_patch_to_mail(FILE *out, FILE *in, int keep_cr)
 		fwrite(sb.buf, 1, sb.len, out);
 		strbuf_reset(&sb);
 	}
-
+exit:
 	strbuf_release(&sb);
-	return 0;
+	return rc;
 }
 
 /**
@@ -964,7 +987,7 @@ static int split_mail(struct am_state *state, enum patch_format patch_format,
 	case PATCH_FORMAT_MBOXRD:
 		return split_mail_mbox(state, paths, keep_cr, 1);
 	default:
-		die("BUG: invalid patch_format");
+		BUG("invalid patch_format");
 	}
 	return -1;
 }
@@ -989,6 +1012,7 @@ static void am_setup(struct am_state *state, enum patch_format patch_format,
 
 	if (mkdir(state->dir, 0777) < 0 && errno != EEXIST)
 		die_errno(_("failed to create directory '%s'"), state->dir);
+	delete_ref(NULL, "REBASE_HEAD", NULL, REF_NO_DEREF);
 
 	if (split_mail(state, patch_format, paths, keep_cr) < 0) {
 		am_destroy(state);
@@ -1003,6 +1027,10 @@ static void am_setup(struct am_state *state, enum patch_format patch_format,
 	write_state_bool(state, "sign", state->signoff);
 	write_state_bool(state, "utf8", state->utf8);
 
+	if (state->allow_rerere_autoupdate)
+		write_state_bool(state, "rerere-autoupdate",
+			 state->allow_rerere_autoupdate == RERERE_AUTOUPDATE);
+
 	switch (state->keep) {
 	case KEEP_FALSE:
 		str = "f";
@@ -1014,7 +1042,7 @@ static void am_setup(struct am_state *state, enum patch_format patch_format,
 		str = "b";
 		break;
 	default:
-		die("BUG: invalid value for state->keep");
+		BUG("invalid value for state->keep");
 	}
 
 	write_state_text(state, "keep", str);
@@ -1031,11 +1059,11 @@ static void am_setup(struct am_state *state, enum patch_format patch_format,
 		str = "t";
 		break;
 	default:
-		die("BUG: invalid value for state->scissors");
+		BUG("invalid value for state->scissors");
 	}
 	write_state_text(state, "scissors", str);
 
-	sq_quote_argv(&sb, state->git_apply_opts.argv, 0);
+	sq_quote_argv(&sb, state->git_apply_opts.argv);
 	write_state_text(state, "apply-opt", sb.buf);
 
 	if (state->rebasing)
@@ -1046,8 +1074,8 @@ static void am_setup(struct am_state *state, enum patch_format patch_format,
 	if (!get_oid("HEAD", &curr_head)) {
 		write_state_text(state, "abort-safety", oid_to_hex(&curr_head));
 		if (!state->rebasing)
-			update_ref_oid("am", "ORIG_HEAD", &curr_head, NULL, 0,
-					UPDATE_REFS_DIE_ON_ERR);
+			update_ref("am", "ORIG_HEAD", &curr_head, NULL, 0,
+				   UPDATE_REFS_DIE_ON_ERR);
 	} else {
 		write_state_text(state, "abort-safety", "");
 		if (!state->rebasing)
@@ -1084,6 +1112,7 @@ static void am_next(struct am_state *state)
 
 	oidclr(&state->orig_commit);
 	unlink(am_path(state, "original-commit"));
+	delete_ref(NULL, "REBASE_HEAD", NULL, REF_NO_DEREF);
 
 	if (!get_oid("HEAD", &head))
 		write_state_text(state, "abort-safety", oid_to_hex(&head));
@@ -1112,49 +1141,12 @@ static const char *msgnum(const struct am_state *state)
  */
 static void refresh_and_write_cache(void)
 {
-	struct lock_file *lock_file = xcalloc(1, sizeof(struct lock_file));
+	struct lock_file lock_file = LOCK_INIT;
 
-	hold_locked_index(lock_file, LOCK_DIE_ON_ERROR);
+	hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
 	refresh_cache(REFRESH_QUIET);
-	if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
+	if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
 		die(_("unable to write index file"));
-}
-
-/**
- * Returns 1 if the index differs from HEAD, 0 otherwise. When on an unborn
- * branch, returns 1 if there are entries in the index, 0 otherwise. If an
- * strbuf is provided, the space-separated list of files that differ will be
- * appended to it.
- */
-static int index_has_changes(struct strbuf *sb)
-{
-	struct object_id head;
-	int i;
-
-	if (!get_sha1_tree("HEAD", head.hash)) {
-		struct diff_options opt;
-
-		diff_setup(&opt);
-		DIFF_OPT_SET(&opt, EXIT_WITH_STATUS);
-		if (!sb)
-			DIFF_OPT_SET(&opt, QUICK);
-		do_diff_cache(&head, &opt);
-		diffcore_std(&opt);
-		for (i = 0; sb && i < diff_queued_diff.nr; i++) {
-			if (i)
-				strbuf_addch(sb, ' ');
-			strbuf_addstr(sb, diff_queued_diff.queue[i]->two->path);
-		}
-		diff_flush(&opt);
-		return DIFF_OPT_TST(&opt, HAS_CHANGES) != 0;
-	} else {
-		for (i = 0; sb && i < active_nr; i++) {
-			if (i)
-				strbuf_addch(sb, ' ');
-			strbuf_addstr(sb, active_cache[i]->name);
-		}
-		return !!active_nr;
-	}
 }
 
 /**
@@ -1181,34 +1173,10 @@ static void NORETURN die_user_resolve(const struct am_state *state)
  */
 static void am_append_signoff(struct am_state *state)
 {
-	char *cp;
-	struct strbuf mine = STRBUF_INIT;
 	struct strbuf sb = STRBUF_INIT;
 
 	strbuf_attach(&sb, state->msg, state->msg_len, state->msg_len);
-
-	/* our sign-off */
-	strbuf_addf(&mine, "\n%s%s\n",
-		    sign_off_header,
-		    fmt_name(getenv("GIT_COMMITTER_NAME"),
-			     getenv("GIT_COMMITTER_EMAIL")));
-
-	/* Does sb end with it already? */
-	if (mine.len < sb.len &&
-	    !strcmp(mine.buf, sb.buf + sb.len - mine.len))
-		goto exit; /* no need to duplicate */
-
-	/* Does it have any Signed-off-by: in the text */
-	for (cp = sb.buf;
-	     cp && *cp && (cp = strstr(cp, sign_off_header)) != NULL;
-	     cp = strchr(cp, '\n')) {
-		if (sb.buf == cp || cp[-1] == '\n')
-			break;
-	}
-
-	strbuf_addstr(&sb, mine.buf + !!cp);
-exit:
-	strbuf_release(&mine);
+	append_signoff(&sb, 0, 0);
 	state->msg = strbuf_detach(&sb, &state->msg_len);
 }
 
@@ -1249,7 +1217,7 @@ static int parse_mail(struct am_state *state, const char *mail)
 		mi.keep_non_patch_brackets_in_subject = 1;
 		break;
 	default:
-		die("BUG: invalid value for state->keep");
+		BUG("invalid value for state->keep");
 	}
 
 	if (state->message_id)
@@ -1265,7 +1233,7 @@ static int parse_mail(struct am_state *state, const char *mail)
 		mi.use_scissors = 1;
 		break;
 	default:
-		die("BUG: invalid value for state->scissors");
+		BUG("invalid value for state->scissors");
 	}
 
 	mi.input = xfopen(mail, "r");
@@ -1275,6 +1243,10 @@ static int parse_mail(struct am_state *state, const char *mail)
 
 	fclose(mi.input);
 	fclose(mi.output);
+
+	if (mi.format_flowed)
+		warning(_("Patch sent with format=flowed; "
+			  "space at the end of lines might be lost."));
 
 	/* Extract message and author information */
 	fp = xfopen(am_path(state, "info"), "r");
@@ -1404,15 +1376,15 @@ static void write_commit_patch(const struct am_state *state, struct commit *comm
 	FILE *fp;
 
 	fp = xfopen(am_path(state, "patch"), "w");
-	init_revisions(&rev_info, NULL);
+	repo_init_revisions(the_repository, &rev_info, NULL);
 	rev_info.diff = 1;
 	rev_info.abbrev = 0;
 	rev_info.disable_stdin = 1;
 	rev_info.show_root_diff = 1;
 	rev_info.diffopt.output_format = DIFF_FORMAT_PATCH;
 	rev_info.no_commit_id = 1;
-	DIFF_OPT_SET(&rev_info.diffopt, BINARY);
-	DIFF_OPT_SET(&rev_info.diffopt, FULL_INDEX);
+	rev_info.diffopt.flags.binary = 1;
+	rev_info.diffopt.flags.full_index = 1;
 	rev_info.diffopt.use_color = 0;
 	rev_info.diffopt.file = fp;
 	rev_info.diffopt.close_file = 1;
@@ -1432,13 +1404,14 @@ static void write_index_patch(const struct am_state *state)
 	struct rev_info rev_info;
 	FILE *fp;
 
-	if (!get_sha1_tree("HEAD", head.hash))
-		tree = lookup_tree(&head);
+	if (!get_oid_tree("HEAD", &head))
+		tree = lookup_tree(the_repository, &head);
 	else
-		tree = lookup_tree(&empty_tree_oid);
+		tree = lookup_tree(the_repository,
+				   the_repository->hash_algo->empty_tree);
 
 	fp = xfopen(am_path(state, "patch"), "w");
-	init_revisions(&rev_info, NULL);
+	repo_init_revisions(the_repository, &rev_info, NULL);
 	rev_info.diff = 1;
 	rev_info.disable_stdin = 1;
 	rev_info.no_commit_id = 1;
@@ -1476,6 +1449,8 @@ static int parse_mail_rebase(struct am_state *state, const char *mail)
 
 	oidcpy(&state->orig_commit, &commit_oid);
 	write_state_text(state, "original-commit", oid_to_hex(&commit_oid));
+	update_ref("am", "REBASE_HEAD", &commit_oid,
+		   NULL, REF_NO_DEREF, UPDATE_REFS_DIE_ON_ERR);
 
 	return 0;
 }
@@ -1490,12 +1465,11 @@ static int run_apply(const struct am_state *state, const char *index_file)
 	struct argv_array apply_opts = ARGV_ARRAY_INIT;
 	struct apply_state apply_state;
 	int res, opts_left;
-	static struct lock_file lock_file;
 	int force_apply = 0;
 	int options = 0;
 
-	if (init_apply_state(&apply_state, NULL, &lock_file))
-		die("BUG: init_apply_state() failed");
+	if (init_apply_state(&apply_state, the_repository, NULL))
+		BUG("init_apply_state() failed");
 
 	argv_array_push(&apply_opts, "apply");
 	argv_array_pushv(&apply_opts, state->git_apply_opts.argv);
@@ -1521,7 +1495,7 @@ static int run_apply(const struct am_state *state, const char *index_file)
 		apply_state.apply_verbosity = verbosity_silent;
 
 	if (check_apply_state(&apply_state, force_apply))
-		die("BUG: check_apply_state() failed");
+		BUG("check_apply_state() failed");
 
 	argv_array_push(&apply_paths, am_path(state, "patch"));
 
@@ -1574,7 +1548,7 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 	char *their_tree_name;
 
 	if (get_oid("HEAD", &our_tree) < 0)
-		hashcpy(our_tree.hash, EMPTY_TREE_SHA1_BIN);
+		oidcpy(&our_tree, the_hash_algo->empty_tree);
 
 	if (build_fake_ancestor(state, index_path))
 		return error("could not build fake ancestor");
@@ -1582,7 +1556,7 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 	discard_cache();
 	read_cache_from(index_path);
 
-	if (write_index_as_tree(orig_tree.hash, &the_index, index_path, 0, NULL))
+	if (write_index_as_tree(&orig_tree, &the_index, index_path, 0, NULL))
 		return error(_("Repository lacks necessary blobs to fall back on 3-way merge."));
 
 	say(state, stdout, _("Using index info to reconstruct a base tree..."));
@@ -1595,7 +1569,7 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 		struct rev_info rev_info;
 		const char *diff_filter_str = "--diff-filter=AM";
 
-		init_revisions(&rev_info, NULL);
+		repo_init_revisions(the_repository, &rev_info, NULL);
 		rev_info.diffopt.output_format = DIFF_FORMAT_NAME_STATUS;
 		diff_opt_parse(&rev_info.diffopt, &diff_filter_str, 1, rev_info.prefix);
 		add_pending_oid(&rev_info, "HEAD", &our_tree, 0);
@@ -1607,7 +1581,7 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 		return error(_("Did you hand edit your patch?\n"
 				"It does not apply to blobs recorded in its index."));
 
-	if (write_index_as_tree(their_tree.hash, &the_index, index_path, 0, NULL))
+	if (write_index_as_tree(&their_tree, &the_index, index_path, 0, NULL))
 		return error("could not write tree");
 
 	say(state, stdout, _("Falling back to patching base and 3-way merge..."));
@@ -1628,12 +1602,13 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 	o.branch1 = "HEAD";
 	their_tree_name = xstrfmt("%.*s", linelen(state->msg), state->msg);
 	o.branch2 = their_tree_name;
+	o.detect_directory_renames = 0;
 
 	if (state->quiet)
 		o.verbosity = 0;
 
 	if (merge_recursive_generic(&o, &our_tree, &their_tree, 1, bases, &result)) {
-		rerere(state->allow_rerere_autoupdate);
+		repo_rerere(the_repository, state->allow_rerere_autoupdate);
 		free(their_tree_name);
 		return error(_("Failed to merge in the changes."));
 	}
@@ -1658,12 +1633,13 @@ static void do_commit(const struct am_state *state)
 	if (run_hook_le(NULL, "pre-applypatch", NULL))
 		exit(1);
 
-	if (write_cache_as_tree(tree.hash, 0, NULL))
+	if (write_cache_as_tree(&tree, 0, NULL))
 		die(_("git write-tree failed to write a tree"));
 
-	if (!get_sha1_commit("HEAD", parent.hash)) {
+	if (!get_oid_commit("HEAD", &parent)) {
 		old_oid = &parent;
-		commit_list_insert(lookup_commit(&parent), &parents);
+		commit_list_insert(lookup_commit(the_repository, &parent),
+				   &parents);
 	} else {
 		old_oid = NULL;
 		say(state, stderr, _("applying to an empty history"));
@@ -1677,8 +1653,8 @@ static void do_commit(const struct am_state *state)
 		setenv("GIT_COMMITTER_DATE",
 			state->ignore_date ? "" : state->author_date, 1);
 
-	if (commit_tree(state->msg, state->msg_len, tree.hash, parents, commit.hash,
-				author, state->sign_commit))
+	if (commit_tree(state->msg, state->msg_len, &tree, parents, &commit,
+			author, state->sign_commit))
 		die(_("failed to write commit object"));
 
 	reflog_msg = getenv("GIT_REFLOG_ACTION");
@@ -1688,8 +1664,8 @@ static void do_commit(const struct am_state *state)
 	strbuf_addf(&sb, "%s: %.*s", reflog_msg, linelen(state->msg),
 			state->msg);
 
-	update_ref_oid(sb.buf, "HEAD", &commit, old_oid, 0,
-			UPDATE_REFS_DIE_ON_ERR);
+	update_ref(sb.buf, "HEAD", &commit, old_oid, 0,
+		   UPDATE_REFS_DIE_ON_ERR);
 
 	if (state->rebasing) {
 		FILE *fp = xfopen(am_path(state, "rewritten"), "a");
@@ -1795,7 +1771,7 @@ static void am_run(struct am_state *state, int resume)
 
 	refresh_and_write_cache();
 
-	if (index_has_changes(&sb)) {
+	if (index_has_changes(&the_index, NULL, &sb)) {
 		write_state_bool(state, "dirtyindex", 1);
 		die(_("Dirty index: cannot apply patches (dirty: %s)"), sb.buf);
 	}
@@ -1852,23 +1828,19 @@ static void am_run(struct am_state *state, int resume)
 			 * Applying the patch to an earlier tree and merging
 			 * the result may have produced the same tree as ours.
 			 */
-			if (!apply_status && !index_has_changes(NULL)) {
+			if (!apply_status &&
+			    !index_has_changes(&the_index, NULL, NULL)) {
 				say(state, stdout, _("No changes -- Patch already applied."));
 				goto next;
 			}
 		}
 
 		if (apply_status) {
-			int advice_amworkdir = 1;
-
 			printf_ln(_("Patch failed at %s %.*s"), msgnum(state),
 				linelen(state->msg), state->msg);
 
-			git_config_get_bool("advice.amworkdir", &advice_amworkdir);
-
 			if (advice_amworkdir)
-				printf_ln(_("The copy of the patch that failed is found in: %s"),
-						am_path(state, "patch"));
+				advise(_("Use 'git am --show-current-patch' to see the failed patch"));
 
 			die_user_resolve(state);
 		}
@@ -1895,7 +1867,7 @@ next:
 	 */
 	if (!state->rebasing) {
 		am_destroy(state);
-		close_all_packs();
+		close_all_packs(the_repository->objects);
 		run_command_v_opt(argv_gc_auto, RUN_GIT_CMD);
 	}
 }
@@ -1911,7 +1883,7 @@ static void am_resolve(struct am_state *state)
 
 	say(state, stdout, _("Applying: %.*s"), linelen(state->msg), state->msg);
 
-	if (!index_has_changes(NULL)) {
+	if (!index_has_changes(&the_index, NULL, NULL)) {
 		printf_ln(_("No changes - did you forget to use 'git add'?\n"
 			"If there is nothing left to stage, chances are that something else\n"
 			"already introduced the same changes; you might want to skip this patch."));
@@ -1931,7 +1903,7 @@ static void am_resolve(struct am_state *state)
 			goto next;
 	}
 
-	rerere(0);
+	repo_rerere(the_repository, 0);
 
 	do_commit(state);
 
@@ -1948,15 +1920,14 @@ next:
  */
 static int fast_forward_to(struct tree *head, struct tree *remote, int reset)
 {
-	struct lock_file *lock_file;
+	struct lock_file lock_file = LOCK_INIT;
 	struct unpack_trees_options opts;
 	struct tree_desc t[2];
 
 	if (parse_tree(head) || parse_tree(remote))
 		return -1;
 
-	lock_file = xcalloc(1, sizeof(struct lock_file));
-	hold_locked_index(lock_file, LOCK_DIE_ON_ERROR);
+	hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
 
 	refresh_cache(REFRESH_QUIET);
 
@@ -1972,11 +1943,11 @@ static int fast_forward_to(struct tree *head, struct tree *remote, int reset)
 	init_tree_desc(&t[1], remote->buffer, remote->size);
 
 	if (unpack_trees(2, t, &opts)) {
-		rollback_lock_file(lock_file);
+		rollback_lock_file(&lock_file);
 		return -1;
 	}
 
-	if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
+	if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
 		die(_("unable to write new index file"));
 
 	return 0;
@@ -1988,15 +1959,14 @@ static int fast_forward_to(struct tree *head, struct tree *remote, int reset)
  */
 static int merge_tree(struct tree *tree)
 {
-	struct lock_file *lock_file;
+	struct lock_file lock_file = LOCK_INIT;
 	struct unpack_trees_options opts;
 	struct tree_desc t[1];
 
 	if (parse_tree(tree))
 		return -1;
 
-	lock_file = xcalloc(1, sizeof(struct lock_file));
-	hold_locked_index(lock_file, LOCK_DIE_ON_ERROR);
+	hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
 
 	memset(&opts, 0, sizeof(opts));
 	opts.head_idx = 1;
@@ -2007,11 +1977,11 @@ static int merge_tree(struct tree *tree)
 	init_tree_desc(&t[0], tree->buffer, tree->size);
 
 	if (unpack_trees(1, t, &opts)) {
-		rollback_lock_file(lock_file);
+		rollback_lock_file(&lock_file);
 		return -1;
 	}
 
-	if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
+	if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
 		die(_("unable to write new index file"));
 
 	return 0;
@@ -2039,7 +2009,7 @@ static int clean_index(const struct object_id *head, const struct object_id *rem
 	if (fast_forward_to(head_tree, head_tree, 1))
 		return -1;
 
-	if (write_cache_as_tree(index.hash, 0, NULL))
+	if (write_cache_as_tree(&index, 0, NULL))
 		return -1;
 
 	index_tree = parse_tree_indirect(&index);
@@ -2077,7 +2047,7 @@ static void am_skip(struct am_state *state)
 	am_rerere_clear();
 
 	if (get_oid("HEAD", &head))
-		hashcpy(head.hash, EMPTY_TREE_SHA1_BIN);
+		oidcpy(&head, the_hash_algo->empty_tree);
 
 	if (clean_index(&head, &head))
 		die(_("failed to clean index"));
@@ -2107,11 +2077,12 @@ static int safe_to_abort(const struct am_state *state)
 			die(_("could not parse %s"), am_path(state, "abort-safety"));
 	} else
 		oidclr(&abort_safety);
+	strbuf_release(&sb);
 
 	if (get_oid("HEAD", &head))
 		oidclr(&head);
 
-	if (!oidcmp(&head, &abort_safety))
+	if (oideq(&head, &abort_safety))
 		return 1;
 
 	warning(_("You seem to have moved HEAD since the last 'am' failure.\n"
@@ -2136,26 +2107,54 @@ static void am_abort(struct am_state *state)
 
 	am_rerere_clear();
 
-	curr_branch = resolve_refdup("HEAD", 0, curr_head.hash, NULL);
+	curr_branch = resolve_refdup("HEAD", 0, &curr_head, NULL);
 	has_curr_head = curr_branch && !is_null_oid(&curr_head);
 	if (!has_curr_head)
-		hashcpy(curr_head.hash, EMPTY_TREE_SHA1_BIN);
+		oidcpy(&curr_head, the_hash_algo->empty_tree);
 
 	has_orig_head = !get_oid("ORIG_HEAD", &orig_head);
 	if (!has_orig_head)
-		hashcpy(orig_head.hash, EMPTY_TREE_SHA1_BIN);
+		oidcpy(&orig_head, the_hash_algo->empty_tree);
 
 	clean_index(&curr_head, &orig_head);
 
 	if (has_orig_head)
-		update_ref_oid("am --abort", "HEAD", &orig_head,
-				has_curr_head ? &curr_head : NULL, 0,
-				UPDATE_REFS_DIE_ON_ERR);
+		update_ref("am --abort", "HEAD", &orig_head,
+			   has_curr_head ? &curr_head : NULL, 0,
+			   UPDATE_REFS_DIE_ON_ERR);
 	else if (curr_branch)
-		delete_ref(NULL, curr_branch, NULL, REF_NODEREF);
+		delete_ref(NULL, curr_branch, NULL, REF_NO_DEREF);
 
 	free(curr_branch);
 	am_destroy(state);
+}
+
+static int show_patch(struct am_state *state)
+{
+	struct strbuf sb = STRBUF_INIT;
+	const char *patch_path;
+	int len;
+
+	if (!is_null_oid(&state->orig_commit)) {
+		const char *av[4] = { "show", NULL, "--", NULL };
+		char *new_oid_str;
+		int ret;
+
+		av[1] = new_oid_str = xstrdup(oid_to_hex(&state->orig_commit));
+		ret = run_command_v_opt(av, RUN_GIT_CMD);
+		free(new_oid_str);
+		return ret;
+	}
+
+	patch_path = am_path(state, msgnum(state));
+	len = strbuf_read_file(&sb, patch_path, 0);
+	if (len < 0)
+		die_errno(_("failed to read '%s'"), patch_path);
+
+	setup_pager();
+	write_in_full(1, sb.buf, sb.len);
+	strbuf_release(&sb);
+	return 0;
 }
 
 /**
@@ -2186,7 +2185,9 @@ enum resume_mode {
 	RESUME_APPLY,
 	RESUME_RESOLVED,
 	RESUME_SKIP,
-	RESUME_ABORT
+	RESUME_ABORT,
+	RESUME_QUIT,
+	RESUME_SHOW_PATCH
 };
 
 static int git_am_config(const char *k, const char *v, void *cb)
@@ -2208,6 +2209,7 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 	int patch_format = PATCH_FORMAT_UNKNOWN;
 	enum resume_mode resume = RESUME_FALSE;
 	int in_progress;
+	int ret = 0;
 
 	const char * const usage[] = {
 		N_("git am [<options>] [(<mbox> | <Maildir>)...]"),
@@ -2234,12 +2236,12 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 			N_("pass -b flag to git-mailinfo"), KEEP_NON_PATCH),
 		OPT_BOOL('m', "message-id", &state.message_id,
 			N_("pass -m flag to git-mailinfo")),
-		{ OPTION_SET_INT, 0, "keep-cr", &keep_cr, NULL,
-		  N_("pass --keep-cr flag to git-mailsplit for mbox format"),
-		  PARSE_OPT_NOARG | PARSE_OPT_NONEG, NULL, 1},
-		{ OPTION_SET_INT, 0, "no-keep-cr", &keep_cr, NULL,
-		  N_("do not pass --keep-cr flag to git-mailsplit independent of am.keepcr"),
-		  PARSE_OPT_NOARG | PARSE_OPT_NONEG, NULL, 0},
+		OPT_SET_INT_F(0, "keep-cr", &keep_cr,
+			N_("pass --keep-cr flag to git-mailsplit for mbox format"),
+			1, PARSE_OPT_NONEG),
+		OPT_SET_INT_F(0, "no-keep-cr", &keep_cr,
+			N_("do not pass --keep-cr flag to git-mailsplit independent of am.keepcr"),
+			0, PARSE_OPT_NONEG),
 		OPT_BOOL('c', "scissors", &state.scissors,
 			N_("strip everything before a scissors line")),
 		OPT_PASSTHRU_ARGV(0, "whitespace", &state.git_apply_opts, N_("action"),
@@ -2286,6 +2288,12 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 		OPT_CMDMODE(0, "abort", &resume,
 			N_("restore the original branch and abort the patching operation."),
 			RESUME_ABORT),
+		OPT_CMDMODE(0, "quit", &resume,
+			N_("abort the patching operation but keep HEAD where it is."),
+			RESUME_QUIT),
+		OPT_CMDMODE(0, "show-current-patch", &resume,
+			N_("show the patch being applied."),
+			RESUME_SHOW_PATCH),
 		OPT_BOOL(0, "committer-date-is-author-date",
 			&state.committer_date_is_author_date,
 			N_("lie about committer date")),
@@ -2320,7 +2328,7 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 	/* Ensure a valid committer ident can be constructed */
 	git_committer_info(IDENT_STRICT);
 
-	if (read_index_preload(&the_index, NULL) < 0)
+	if (read_index_preload(&the_index, NULL, 0) < 0)
 		die(_("failed to read the index"));
 
 	if (in_progress) {
@@ -2354,7 +2362,7 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 		 * stray directories.
 		 */
 		if (file_exists(state.dir) && !state.rebasing) {
-			if (resume == RESUME_ABORT) {
+			if (resume == RESUME_ABORT || resume == RESUME_QUIT) {
 				am_destroy(&state);
 				am_state_release(&state);
 				return 0;
@@ -2396,11 +2404,18 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 	case RESUME_ABORT:
 		am_abort(&state);
 		break;
+	case RESUME_QUIT:
+		am_rerere_clear();
+		am_destroy(&state);
+		break;
+	case RESUME_SHOW_PATCH:
+		ret = show_patch(&state);
+		break;
 	default:
-		die("BUG: invalid resume value");
+		BUG("invalid resume value");
 	}
 
 	am_state_release(&state);
 
-	return 0;
+	return ret;
 }

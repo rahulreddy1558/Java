@@ -9,7 +9,7 @@
 #include "lockfile.h"
 #include "dir.h"
 #include "pathspec.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "cache-tree.h"
 #include "run-command.h"
 #include "parse-options.h"
@@ -26,24 +26,25 @@ static const char * const builtin_add_usage[] = {
 };
 static int patch_interactive, add_interactive, edit_interactive;
 static int take_worktree_changes;
+static int add_renormalize;
 
 struct update_callback_data {
 	int flags;
 	int add_errors;
 };
 
-static void chmod_pathspec(struct pathspec *pathspec, int force_mode)
+static void chmod_pathspec(struct pathspec *pathspec, char flip)
 {
 	int i;
 
 	for (i = 0; i < active_nr; i++) {
 		struct cache_entry *ce = active_cache[i];
 
-		if (pathspec && !ce_path_match(ce, pathspec, NULL))
+		if (pathspec && !ce_path_match(&the_index, ce, pathspec, NULL))
 			continue;
 
-		if (chmod_cache_entry(ce, force_mode) < 0)
-			fprintf(stderr, "cannot chmod '%s'", ce->name);
+		if (chmod_cache_entry(ce, flip) < 0)
+			fprintf(stderr, "cannot chmod %cx '%s'\n", flip, ce->name);
 	}
 }
 
@@ -109,16 +110,37 @@ int add_files_to_cache(const char *prefix,
 	memset(&data, 0, sizeof(data));
 	data.flags = flags;
 
-	init_revisions(&rev, prefix);
+	repo_init_revisions(the_repository, &rev, prefix);
 	setup_revisions(0, NULL, &rev, NULL);
 	if (pathspec)
 		copy_pathspec(&rev.prune_data, pathspec);
 	rev.diffopt.output_format = DIFF_FORMAT_CALLBACK;
 	rev.diffopt.format_callback = update_callback;
 	rev.diffopt.format_callback_data = &data;
+	rev.diffopt.flags.override_submodule_config = 1;
 	rev.max_count = 0; /* do not compare unmerged paths with stage #2 */
 	run_diff_files(&rev, DIFF_RACY_IS_MODIFIED);
+	clear_pathspec(&rev.prune_data);
 	return !!data.add_errors;
+}
+
+static int renormalize_tracked_files(const struct pathspec *pathspec, int flags)
+{
+	int i, retval = 0;
+
+	for (i = 0; i < active_nr; i++) {
+		struct cache_entry *ce = active_cache[i];
+
+		if (ce_stage(ce))
+			continue; /* do not touch unmerged paths */
+		if (!S_ISREG(ce->ce_mode) && !S_ISLNK(ce->ce_mode))
+			continue; /* do not touch non blobs */
+		if (pathspec && !ce_path_match(&the_index, ce, pathspec, NULL))
+			continue;
+		retval |= add_file_to_cache(ce->name, flags | HASH_RENORMALIZE);
+	}
+
+	return retval;
 }
 
 static char *prune_directory(struct dir_struct *dir, struct pathspec *pathspec, int prefix)
@@ -133,7 +155,7 @@ static char *prune_directory(struct dir_struct *dir, struct pathspec *pathspec, 
 	i = dir->nr;
 	while (--i >= 0) {
 		struct dir_entry *entry = *src++;
-		if (dir_path_match(entry, pathspec, prefix, seen))
+		if (dir_path_match(&the_index, entry, pathspec, prefix, seen))
 			*dst++ = entry;
 	}
 	dir->nr = dst - dir->entries;
@@ -210,13 +232,13 @@ static int edit_patch(int argc, const char **argv, const char *prefix)
 	if (read_cache() < 0)
 		die(_("Could not read the index"));
 
-	init_revisions(&rev, prefix);
+	repo_init_revisions(the_repository, &rev, prefix);
 	rev.diffopt.context = 7;
 
 	argc = setup_revisions(argc, argv, &rev, NULL);
 	rev.diffopt.output_format = DIFF_FORMAT_PATCH;
 	rev.diffopt.use_color = 0;
-	DIFF_OPT_SET(&rev.diffopt, IGNORE_DIRTY_SUBMODULES);
+	rev.diffopt.flags.ignore_dirty_submodules = 1;
 	out = open(file, O_CREAT | O_WRONLY, 0666);
 	if (out < 0)
 		die(_("Could not open '%s' for writing."), file);
@@ -242,8 +264,6 @@ static int edit_patch(int argc, const char **argv, const char *prefix)
 	free(file);
 	return 0;
 }
-
-static struct lock_file lock_file;
 
 static const char ignore_error[] =
 N_("The following paths are ignored by one of your .gitignore files:\n");
@@ -272,8 +292,9 @@ static struct option builtin_add_options[] = {
 	OPT_BOOL('i', "interactive", &add_interactive, N_("interactive picking")),
 	OPT_BOOL('p', "patch", &patch_interactive, N_("select hunks interactively")),
 	OPT_BOOL('e', "edit", &edit_interactive, N_("edit current diff and apply")),
-	OPT__FORCE(&ignored_too, N_("allow adding otherwise ignored files")),
+	OPT__FORCE(&ignored_too, N_("allow adding otherwise ignored files"), 0),
 	OPT_BOOL('u', "update", &take_worktree_changes, N_("update tracked files")),
+	OPT_BOOL(0, "renormalize", &add_renormalize, N_("renormalize EOL of tracked files (implies -u)")),
 	OPT_BOOL('N', "intent-to-add", &intent_to_add, N_("record only the fact that the path will be added later")),
 	OPT_BOOL('A', "all", &addremove_explicit, N_("add changes from all tracked and untracked files")),
 	{ OPTION_CALLBACK, 0, "ignore-removal", &addremove_explicit,
@@ -283,7 +304,8 @@ static struct option builtin_add_options[] = {
 	OPT_BOOL( 0 , "refresh", &refresh_only, N_("don't add, only refresh the index")),
 	OPT_BOOL( 0 , "ignore-errors", &ignore_add_errors, N_("just skip files which cannot be added because of errors")),
 	OPT_BOOL( 0 , "ignore-missing", &ignore_missing, N_("check if - even missing - files are ignored in dry run")),
-	OPT_STRING( 0 , "chmod", &chmod_arg, N_("(+/-)x"), N_("override the executable bit of the listed files")),
+	OPT_STRING(0, "chmod", &chmod_arg, "(+|-)x",
+		   N_("override the executable bit of the listed files")),
 	OPT_HIDDEN_BOOL(0, "warn-embedded-repo", &warn_on_embedded_repo,
 			N_("warn when adding an embedded repository")),
 	OPT_END(),
@@ -370,6 +392,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	int add_new_files;
 	int require_pathspec;
 	char *seen = NULL;
+	struct lock_file lock_file = LOCK_INIT;
 
 	git_config(add_config, NULL);
 
@@ -404,7 +427,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 			  chmod_arg[1] != 'x' || chmod_arg[2]))
 		die(_("--chmod param '%s' must be either -x or +x"), chmod_arg);
 
-	add_new_files = !take_worktree_changes && !refresh_only;
+	add_new_files = !take_worktree_changes && !refresh_only && !add_renormalize;
 	require_pathspec = !(take_worktree_changes || (0 < addremove_explicit));
 
 	hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
@@ -431,7 +454,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	 * Check the "pathspec '%s' did not match any files" block
 	 * below before enabling new magic.
 	 */
-	parse_pathspec(&pathspec, 0,
+	parse_pathspec(&pathspec, PATHSPEC_ATTR,
 		       PATHSPEC_PREFER_FULL |
 		       PATHSPEC_SYMLINK_LEADING_PATH,
 		       prefix, argv);
@@ -498,7 +521,10 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 
 	plug_bulk_checkin();
 
-	exit_status |= add_files_to_cache(prefix, &pathspec, flags);
+	if (add_renormalize)
+		exit_status |= renormalize_tracked_files(&pathspec, flags);
+	else
+		exit_status |= add_files_to_cache(prefix, &pathspec, flags);
 
 	if (add_new_files)
 		exit_status |= add_files(&dir, flags);
@@ -508,10 +534,11 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	unplug_bulk_checkin();
 
 finish:
-	if (active_cache_changed) {
-		if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
-			die(_("Unable to write new index file"));
-	}
+	if (write_locked_index(&the_index, &lock_file,
+			       COMMIT_LOCK | SKIP_IF_UNCHANGED))
+		die(_("Unable to write new index file"));
 
+	UNLEAK(pathspec);
+	UNLEAK(dir);
 	return exit_status;
 }

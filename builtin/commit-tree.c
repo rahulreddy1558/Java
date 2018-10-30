@@ -5,6 +5,8 @@
  */
 #include "cache.h"
 #include "config.h"
+#include "object-store.h"
+#include "repository.h"
 #include "commit.h"
 #include "tree.h"
 #include "builtin.h"
@@ -56,10 +58,11 @@ int cmd_commit_tree(int argc, const char **argv, const char *prefix)
 			struct object_id oid;
 			if (argc <= ++i)
 				usage(commit_tree_usage);
-			if (get_sha1_commit(argv[i], oid.hash))
+			if (get_oid_commit(argv[i], &oid))
 				die("Not a valid object name %s", argv[i]);
-			assert_sha1_type(oid.hash, OBJ_COMMIT);
-			new_parent(lookup_commit(&oid), &parents);
+			assert_oid_type(&oid, OBJ_COMMIT);
+			new_parent(lookup_commit(the_repository, &oid),
+						 &parents);
 			continue;
 		}
 
@@ -102,11 +105,10 @@ int cmd_commit_tree(int argc, const char **argv, const char *prefix)
 			if (fd && close(fd))
 				die_errno("git commit-tree: failed to close '%s'",
 					  argv[i]);
-			strbuf_complete_line(&buffer);
 			continue;
 		}
 
-		if (get_sha1_tree(arg, tree_oid.hash))
+		if (get_oid_tree(arg, &tree_oid))
 			die("Not a valid object name %s", arg);
 		if (got_tree)
 			die("Cannot give more than one trees");
@@ -118,8 +120,8 @@ int cmd_commit_tree(int argc, const char **argv, const char *prefix)
 			die_errno("git commit-tree: failed to read");
 	}
 
-	if (commit_tree(buffer.buf, buffer.len, tree_oid.hash, parents,
-			commit_oid.hash, NULL, sign_commit)) {
+	if (commit_tree(buffer.buf, buffer.len, &tree_oid, parents, &commit_oid,
+			NULL, sign_commit)) {
 		strbuf_release(&buffer);
 		return 1;
 	}

@@ -8,7 +8,7 @@ git-update-ref - Update the object name stored in a ref safely
 SYNOPSIS
 --------
 [verse]
-'git update-ref' [-m <reason>] (-d <ref> [<oldvalue>] | [--no-deref] [--create-reflog] <ref> <newvalue> [<oldvalue>] | --stdin [-z])
+'git update-ref' [-m <reason>] [--no-deref] (-d <ref> [<oldvalue>] | [--create-reflog] <ref> <newvalue> [<oldvalue>] | --stdin [-z])
 
 DESCRIPTION
 -----------
@@ -120,7 +120,7 @@ modifications are performed.  Note that while each individual
 <ref> is updated or deleted atomically, a concurrent reader may
 still see a subset of the modifications.
 
-Logging Updates
+LOGGING UPDATES
 ---------------
 If config parameter "core.logAllRefUpdates" is true and the ref is one under
 "refs/heads/", "refs/remotes/", "refs/notes/", or the symbolic ref HEAD; or
