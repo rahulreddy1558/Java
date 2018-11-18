@@ -8,7 +8,10 @@ public class Computeimpl implements Computable {
 	public static void main(String[] args) {
 		Computeimpl computeimpl = new Computeimpl();	
 		System.out.println(computeimpl.doublenumber(2));
-		
+		/*
+		 *  Arraylist impletments iterable and foreach is added as default interface
+		 * 
+		 */
 		ArrayList<String> a = new ArrayList<>();
 		a.add("Orange");
 		a.add("Beto");
