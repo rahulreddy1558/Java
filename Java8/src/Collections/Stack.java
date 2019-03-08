@@ -23,7 +23,7 @@ public class Stack {
 
     int pop(){
         if (tos < 0){
-            System.out.print("Out of stack");
+            System.out.println("Out of stack");
             return 0;
         }
         else {
