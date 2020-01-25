@@ -2,79 +2,9 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="3d96731a-29b4-4f59-9e07-fc0cdc0c29a3" name="Default Changelist" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/compiler.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/encodings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Java8Collections.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/AnonymousClass.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Arrayaslist.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/CollectionConcenpts.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Doublylinkedlist.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/EmployeeStream.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/EmployeeStreamDriver.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Hashset.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/InnerClass.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Linkedlist.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Mapwordcount.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Product.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/ReduceLambda.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Stack.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Stackexample.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Collections/Topclass.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/ArrayListImpl.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/Camera.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/Fakehashstore.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/Fruit.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/LinkedListImpl.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/ListCollection.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/ListIterator.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/ListIteratorImpl.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/Sequence.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/Student.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/StudentHash.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/StudentLambda.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/CollectionsRevisit/Tire.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/ArraySearch.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/Arraysort.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/Bank.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/BankClient.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/BankProgram.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/Coins.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/Hashimpl.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/Init.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/LinkedListImp.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/LinkedListimpl.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/OrderedLinkedList.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/OrderedLnkdList.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/PopulateArray.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/Prac.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/IntrotoDSwithJava/Utillity.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/BeerSong.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/BinarySearchimpl.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Bubblesort.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Collections.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Employee.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/GameEntry.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Guessgame.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/HelloWorld.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/JavaPrimerch1.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Manager.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Player.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/QuickSort.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Simplecalc.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/JavaPrimer/Sortalgo.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/NIO/Hello.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/StreamsLambdas/Computable.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/StreamsLambdas/Computeimpl.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/StreamsLambdas/Functional.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/StreamsLambdas/FunctionalInterface.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/ch01/CreditCard.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/ch01/Utility.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/designclasses/Bank.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/designclasses/BankAccount.java" beforeDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/Datastructures/TestCollections.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Notes.md" beforeDir="false" afterPath="$PROJECT_DIR$/Notes.md" afterDir="false" />
     </list>
     <ignored path="$PROJECT_DIR$/classes/" />
     <ignored path="$PROJECT_DIR$/bin/" />
@@ -86,21 +16,55 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="DefaultGradleProjectSettings">
-    <option name="testRunner" value="GRADLE" />
-    <option name="delegatedBuild" value="true" />
+    <option name="isMigrated" value="true" />
   </component>
   <component name="FileEditorManager">
-    <leaf>
+    <leaf SIDE_TABS_SIZE_LIMIT_KEY="300">
       <file pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/src/main/java/Concurrency/FieldVisibility.class">
           <provider selected="true" editor-type-id="text-editor" />
         </entry>
       </file>
-      <file pinned="false" current-in-tab="true">
+      <file pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/src/main/java/Concurrency/Tax.java">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="30">
-              <caret line="2" column="17" selection-start-line="2" selection-start-column="17" selection-end-line="2" selection-end-column="17" />
+            <state>
+              <caret column="15" selection-start-column="15" selection-end-column="15" />
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/src/main/java/Datastructures/BinarytoDecimal.class">
+          <provider selected="true" editor-type-id="text-editor" />
+        </entry>
+      </file>
+      <file pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/src/main/java/Datastructures/BinarytoDecimal.java">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="-327">
+              <caret line="9" column="13" selection-start-line="9" selection-start-column="13" selection-end-line="9" selection-end-column="13" />
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/src/main/java/Datastructures/TestCollections.java">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="105">
+              <caret line="7" column="7" lean-forward="true" selection-start-line="7" selection-start-column="7" selection-end-line="7" selection-end-column="7" />
+              <folding>
+                <element signature="imports" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file pinned="false" current-in-tab="true">
+        <entry file="jar:///Library/Java/JavaVirtualMachines/jdk-13.0.1.jdk/Contents/Home/lib/src.zip!/java.base/java/util/Collection.java">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="-1365">
+              <caret line="281" column="66" selection-start-line="281" selection-start-column="6" selection-end-line="281" selection-end-column="66" />
             </state>
           </provider>
         </entry>
@@ -129,6 +93,13 @@
       </file>
     </leaf>
   </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Class" />
+      </list>
+    </option>
+  </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
   </component>
@@ -136,6 +107,7 @@
     <option name="CHANGED_PATHS">
       <list>
         <option value="$PROJECT_DIR$/pom.xml" />
+        <option value="$PROJECT_DIR$/src/main/java/Datastructures/TestCollections.java" />
       </list>
     </option>
   </component>
@@ -179,7 +151,6 @@
       <foldersAlwaysOnTop value="true" />
     </navigator>
     <panes>
-      <pane id="Scope" />
       <pane id="ProjectPane">
         <subPane>
           <expand>
@@ -207,12 +178,21 @@
             </path>
             <path>
               <item name="Java8Collections" type="b2602c69:ProjectViewProjectNode" />
+              <item name="Java8" type="462c0819:PsiDirectoryNode" />
+              <item name="src" type="462c0819:PsiDirectoryNode" />
+              <item name="main" type="462c0819:PsiDirectoryNode" />
+              <item name="java" type="462c0819:PsiDirectoryNode" />
+              <item name="Datastructures" type="462c0819:PsiDirectoryNode" />
+            </path>
+            <path>
+              <item name="Java8Collections" type="b2602c69:ProjectViewProjectNode" />
               <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
             </path>
           </expand>
           <select />
         </subPane>
       </pane>
+      <pane id="Scope" />
       <pane id="PackagesPane" />
     </panes>
   </component>
@@ -265,13 +245,14 @@
   </component>
   <component name="ToolWindowManager">
     <frame x="25" y="43" width="1341" height="637" extended-state="0" />
+    <editor active="true" />
     <layout>
       <window_info id="Designer" order="0" />
       <window_info id="UI Designer" order="1" />
       <window_info id="Capture Tool" order="2" />
       <window_info id="Favorites" order="3" side_tool="true" />
       <window_info id="Image Layers" order="4" />
-      <window_info content_ui="combo" id="Project" order="5" visible="true" weight="0.24942264" />
+      <window_info active="true" content_ui="combo" id="Project" order="5" visible="true" weight="0.25327176" />
       <window_info id="Structure" order="6" side_tool="true" weight="0.25" />
       <window_info anchor="bottom" id="Terminal" order="0" />
       <window_info anchor="bottom" id="Event Log" order="1" side_tool="true" />
@@ -287,7 +268,7 @@
       <window_info anchor="right" id="Theme Preview" order="0" />
       <window_info anchor="right" id="Capture Analysis" order="1" />
       <window_info anchor="right" id="Palette&#9;" order="2" />
-      <window_info anchor="right" id="Maven" order="3" visible="true" weight="0.32948422" />
+      <window_info anchor="right" id="Maven" order="3" weight="0.32948422" />
       <window_info anchor="right" id="Palette" order="4" />
       <window_info anchor="right" id="Commander" internal_type="SLIDING" order="5" type="SLIDING" weight="0.4" />
       <window_info anchor="right" id="Ant Build" order="6" weight="0.25" />
@@ -295,15 +276,15 @@
     </layout>
   </component>
   <component name="editorHistoryManager">
-    <entry file="file://$PROJECT_DIR$/src/main/java/Concurrency/FieldVisibility.class">
-      <provider selected="true" editor-type-id="text-editor" />
-    </entry>
     <entry file="file://$PROJECT_DIR$/src/main/java/Concurrency/FieldVisibility.java">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="62">
           <caret line="7" column="38" selection-start-line="7" selection-start-column="38" selection-end-line="7" selection-end-column="38" />
         </state>
       </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/main/java/Concurrency/FieldVisibility.class">
+      <provider selected="true" editor-type-id="text-editor" />
     </entry>
     <entry file="file://$PROJECT_DIR$/src/main/java/StreamsLambdas/Computable.java">
       <provider selected="true" editor-type-id="text-editor">
@@ -316,17 +297,51 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/src/main/java/Concurrency/Tax.java">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="30">
-          <caret line="2" column="17" selection-start-line="2" selection-start-column="17" selection-end-line="2" selection-end-column="17" />
-        </state>
-      </provider>
-    </entry>
     <entry file="file://$PROJECT_DIR$/pom.xml">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="315">
           <caret line="21" column="37" selection-start-line="21" selection-start-column="37" selection-end-line="21" selection-end-column="37" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/main/java/Concurrency/Tax.java">
+      <provider selected="true" editor-type-id="text-editor">
+        <state>
+          <caret column="15" selection-start-column="15" selection-end-column="15" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/main/java/Datastructures/BinarytoDecimal.class">
+      <provider selected="true" editor-type-id="text-editor" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/main/java/Datastructures/BinarytoDecimal.java">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="-327">
+          <caret line="9" column="13" selection-start-line="9" selection-start-column="13" selection-end-line="9" selection-end-column="13" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="jar:///Library/Java/JavaVirtualMachines/jdk-13.0.1.jdk/Contents/Home/lib/src.zip!/java.base/java/util/SortedSet.java">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="-1847">
+          <caret line="107" column="17" selection-start-line="107" selection-start-column="17" selection-end-line="107" selection-end-column="17" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/main/java/Datastructures/TestCollections.java">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="105">
+          <caret line="7" column="7" lean-forward="true" selection-start-line="7" selection-start-column="7" selection-end-line="7" selection-end-column="7" />
+          <folding>
+            <element signature="imports" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="jar:///Library/Java/JavaVirtualMachines/jdk-13.0.1.jdk/Contents/Home/lib/src.zip!/java.base/java/util/Collection.java">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="-1365">
+          <caret line="281" column="66" selection-start-line="281" selection-start-column="6" selection-end-line="281" selection-end-column="66" />
         </state>
       </provider>
     </entry>
